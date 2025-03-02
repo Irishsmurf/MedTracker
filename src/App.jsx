@@ -9,31 +9,94 @@ const MedicationTracker = () => {
     { id: 'diclac', name: 'Diclac', interval: 16 }
   ];
 
-  // State for medication logs and next due times
-  const [medLogs, setMedLogs] = useState([]);
-  const [nextDueTimes, setNextDueTimes] = useState({});
-  const [currentTime, setCurrentTime] = useState(new Date());
-
-  // Load data from localStorage on component mount
-  useEffect(() => {
+  // Initialize state with data from localStorage
+  const [medLogs, setMedLogs] = useState(() => {
     const savedLogs = localStorage.getItem('medLogs');
+    return savedLogs ? JSON.parse(savedLogs) : [];
+  });
+
+  const [nextDueTimes, setNextDueTimes] = useState(() => {
     const savedNextDueTimes = localStorage.getItem('nextDueTimes');
-    
-    if (savedLogs) {
-      setMedLogs(JSON.parse(savedLogs));
+    return savedNextDueTimes ? JSON.parse(savedNextDueTimes) : {};
+  });
+
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notifiedMeds, setNotifiedMeds] = useState(() => {
+    const savedNotifiedMeds = localStorage.getItem('notifiedMeds');
+    return savedNotifiedMeds ? JSON.parse(savedNotifiedMeds) : {};
+  });
+
+  // Request notification permission
+  const requestNotificationPermission = async () => {
+    if (!("Notification" in window)) {
+      alert("This browser does not support desktop notifications");
+      return false;
     }
     
-    if (savedNextDueTimes) {
-      setNextDueTimes(JSON.parse(savedNextDueTimes));
+    if (Notification.permission === "granted") {
+      setNotificationsEnabled(true);
+      return true;
     }
     
-    // Update current time every minute
+    if (Notification.permission !== "denied") {
+      const permission = await Notification.requestPermission();
+      const granted = permission === "granted";
+      setNotificationsEnabled(granted);
+      return granted;
+    }
+    
+    return false;
+  };
+
+  // Enable notifications
+  const enableNotifications = async () => {
+    const granted = await requestNotificationPermission();
+    if (granted) {
+      // Create a test notification
+      new Notification("Medication Tracker", {
+        body: "Notifications enabled successfully!",
+        icon: "/favicon.ico"
+      });
+    }
+  };
+
+  // Update current time every minute and check for due medications
+  useEffect(() => {
     const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 60000);
+      const now = new Date();
+      setCurrentTime(now);
+      
+      // Check for medications that are due
+      if (notificationsEnabled) {
+        Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
+          const dueTime = new Date(dueTimeStr);
+          const medication = medications.find(med => med.id === medId);
+          
+          // If medication is due and we haven't notified for this specific due time
+          if (now >= dueTime && (!notifiedMeds[medId] || notifiedMeds[medId] !== dueTimeStr)) {
+            new Notification(`Time to take ${medication.name}`, {
+              body: `Your ${medication.name} is now due.`,
+              icon: "/favicon.ico"
+            });
+            
+            // Mark as notified
+            setNotifiedMeds(prev => ({
+              ...prev,
+              [medId]: dueTimeStr
+            }));
+          }
+        });
+      }
+    }, 10000); // Check every 10 seconds for more responsive notifications
     
     return () => clearInterval(timer);
-  }, []);
+  }, [nextDueTimes, notificationsEnabled, notifiedMeds]);
+
+  // Save notified meds to localStorage
+  useEffect(() => {
+    localStorage.setItem('notifiedMeds', JSON.stringify(notifiedMeds));
+  }, [notifiedMeds]);
 
   // Save data to localStorage whenever it changes
   useEffect(() => {
@@ -94,6 +157,21 @@ const MedicationTracker = () => {
     <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-center mb-6">Post-Op Medication Tracker</h1>
+        
+        {/* Notification permission button */}
+        {!notificationsEnabled && (
+          <div className="mb-4 bg-blue-50 p-3 rounded-lg border border-blue-200">
+            <p className="text-sm text-blue-800 mb-2">
+              Enable notifications to be alerted when medications are due.
+            </p>
+            <button
+              onClick={enableNotifications}
+              className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 px-3 rounded"
+            >
+              Enable Notifications
+            </button>
+          </div>
+        )}
         
         <div className="grid grid-cols-3 gap-4">
           {medications.map((med) => {
