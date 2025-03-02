@@ -26,6 +26,21 @@ const MedicationTracker = () => {
     const savedNotifiedMeds = localStorage.getItem('notifiedMeds');
     return savedNotifiedMeds ? JSON.parse(savedNotifiedMeds) : {};
   });
+  const [swRegistration, setSwRegistration] = useState(null);
+
+  // Register service worker
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/service-worker.js')
+        .then(registration => {
+          console.log('Service Worker registered with scope:', registration.scope);
+          setSwRegistration(registration);
+        })
+        .catch(error => {
+          console.error('Service Worker registration failed:', error);
+        });
+    }
+  }, []);
 
   // Request notification permission
   const requestNotificationPermission = async () => {
@@ -49,49 +64,91 @@ const MedicationTracker = () => {
     return false;
   };
 
+  // Function to schedule a notification
+  const scheduleNotification = async (medication, dueTime) => {
+    if (!swRegistration || !notificationsEnabled) return;
+
+    // Calculate when to show the notification (at due time)
+    const now = new Date();
+    const dueDate = new Date(dueTime);
+    const delayInMs = Math.max(0, dueDate.getTime() - now.getTime());
+
+    // Store the timer ID so we can cancel it if medication is taken early
+    const timerId = setTimeout(() => {
+      // Check if still due (might have been taken early)
+      const currentDueTime = nextDueTimes[medication.id];
+      if (currentDueTime === dueTime) {
+        // Show notification directly if browser is open
+        if (document.visibilityState === 'visible') {
+          new Notification(`Time to take ${medication.name}`, {
+            body: `Your ${medication.name} is now due.`,
+            icon: "/favicon.ico"
+          });
+        } 
+        // Otherwise use service worker for background notification
+        else if (swRegistration.showNotification) {
+          swRegistration.showNotification(`Time to take ${medication.name}`, {
+            body: `Your ${medication.name} is now due.`,
+            icon: '/favicon.ico',
+            badge: '/favicon.ico',
+            data: {
+              url: window.location.href
+            }
+          });
+        }
+        
+        // Mark as notified
+        setNotifiedMeds(prev => ({
+          ...prev,
+          [medication.id]: dueTime
+        }));
+      }
+    }, delayInMs);
+
+    // Store the timer in localStorage to survive page refreshes
+    // In a real app, you would use IndexedDB for this
+    const scheduledNotifications = JSON.parse(localStorage.getItem('scheduledNotifications') || '{}');
+    scheduledNotifications[medication.id] = {
+      medicationId: medication.id,
+      dueTime: dueTime,
+      timerId: timerId.toString()
+    };
+    localStorage.setItem('scheduledNotifications', JSON.stringify(scheduledNotifications));
+  };
+
   // Enable notifications
   const enableNotifications = async () => {
     const granted = await requestNotificationPermission();
     if (granted) {
       // Create a test notification
-      new Notification("Medication Tracker", {
-        body: "Notifications enabled successfully!",
-        icon: "/favicon.ico"
+      if (swRegistration) {
+        swRegistration.showNotification("Medication Tracker", {
+          body: "Notifications enabled successfully!",
+          icon: "/favicon.ico"
+        });
+      } else {
+        new Notification("Medication Tracker", {
+          body: "Notifications enabled successfully!",
+          icon: "/favicon.ico"
+        });
+      }
+
+      // Schedule notifications for all currently due medications
+      Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
+        const medication = medications.find(med => med.id === medId);
+        scheduleNotification(medication, dueTimeStr);
       });
     }
   };
 
-  // Update current time every minute and check for due medications
+  // Update current time every minute
   useEffect(() => {
     const timer = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
-      
-      // Check for medications that are due
-      if (notificationsEnabled) {
-        Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
-          const dueTime = new Date(dueTimeStr);
-          const medication = medications.find(med => med.id === medId);
-          
-          // If medication is due and we haven't notified for this specific due time
-          if (now >= dueTime && (!notifiedMeds[medId] || notifiedMeds[medId] !== dueTimeStr)) {
-            new Notification(`Time to take ${medication.name}`, {
-              body: `Your ${medication.name} is now due.`,
-              icon: "/favicon.ico"
-            });
-            
-            // Mark as notified
-            setNotifiedMeds(prev => ({
-              ...prev,
-              [medId]: dueTimeStr
-            }));
-          }
-        });
-      }
-    }, 10000); // Check every 10 seconds for more responsive notifications
+      setCurrentTime(new Date());
+    }, 60000);
     
     return () => clearInterval(timer);
-  }, [nextDueTimes, notificationsEnabled, notifiedMeds]);
+  }, []);
 
   // Save notified meds to localStorage
   useEffect(() => {
@@ -103,9 +160,18 @@ const MedicationTracker = () => {
     localStorage.setItem('medLogs', JSON.stringify(medLogs));
   }, [medLogs]);
 
+  // When nextDueTimes changes, schedule notifications
   useEffect(() => {
     localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes));
-  }, [nextDueTimes]);
+    
+    // Schedule notifications if enabled
+    if (notificationsEnabled && swRegistration) {
+      Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
+        const medication = medications.find(med => med.id === medId);
+        scheduleNotification(medication, dueTimeStr);
+      });
+    }
+  }, [nextDueTimes, notificationsEnabled, swRegistration]);
 
   // Function to handle taking medication
   const takeMedication = (med) => {
