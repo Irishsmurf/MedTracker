@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Analytics } from "@vercel/analytics/react"
 
 const MedicationTracker = () => {
   // Medication definitions with names and intervals in hours
@@ -153,6 +154,7 @@ const MedicationTracker = () => {
           </div>
         )}
       </div>
+      <Analytics />
     </div>
   );
 };
