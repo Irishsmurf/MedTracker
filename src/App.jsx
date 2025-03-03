@@ -177,6 +177,7 @@ const MedicationTracker = () => {
   const takeMedication = (med) => {
     const now = new Date();
     const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
+    console.log(`Taking ${med.name} at ${now.toISOString()}`)
     
     // Create a log entry
     const logEntry = {
