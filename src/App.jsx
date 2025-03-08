@@ -6,7 +6,8 @@ const MedicationTracker = () => {
   const medications = [
     { id: 'codeine', name: 'Codeine', interval: 6 },
     { id: 'ibuprofen', name: 'Ibuprofen', interval: 8 },
-    { id: 'diclac', name: 'Diclac', interval: 16 }
+    // { id: 'diclac', name: 'Diclac', interval: 16 },
+    { id: 'augmentin', name: 'Augmentin', interval: 8 },
   ];
 
   // Initialize state with data from localStorage
