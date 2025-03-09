@@ -385,7 +385,7 @@ const MedicationTracker = () => {
   return (
     <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-center mb-6">Post-Op Medication Tracker</h1>
+        <h1 className="text-2xl font-bold text-center mb-6">Medication Tracker</h1>
         
         {/* Notification permission button */}
         {!notificationsEnabled && (
