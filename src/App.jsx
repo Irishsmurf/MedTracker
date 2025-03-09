@@ -1,14 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Analytics } from "@vercel/analytics/react"
+import { Analytics } from "@vercel/analytics/react";
+import { PlusCircle, X, Edit, Check } from "lucide-react";
 
 const MedicationTracker = () => {
-  // Medication definitions with names and intervals in hours
-  const medications = [
-    { id: 'codeine', name: 'Codeine', interval: 6 },
-    { id: 'ibuprofen', name: 'Ibuprofen', interval: 8 },
-    // { id: 'diclac', name: 'Diclac', interval: 16 },
-    { id: 'augmentin', name: 'Augmentin', interval: 8 },
-  ];
+  // Initialize medications from localStorage
+  const [medications, setMedications] = useState(() => {
+    const savedMeds = localStorage.getItem('medications');
+    return savedMeds ? JSON.parse(savedMeds) : [
+      { id: 'codeine', name: 'Codeine', interval: 6 },
+      { id: 'ibuprofen', name: 'Ibuprofen', interval: 8 },
+      { id: 'augmentin', name: 'Augmentin', interval: 8 },
+    ];
+  });
+
+  // State for managing medication editing
+  const [isEditing, setIsEditing] = useState(false);
+  const [newMedication, setNewMedication] = useState({ name: '', interval: 8 });
+  const [editingMedication, setEditingMedication] = useState(null);
 
   // Initialize state with data from localStorage
   const [medLogs, setMedLogs] = useState(() => {
@@ -29,6 +37,11 @@ const MedicationTracker = () => {
   });
   const [swRegistration, setSwRegistration] = useState(null);
   const [exportMessage, setExportMessage] = useState('');
+
+  // Save medications to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('medications', JSON.stringify(medications));
+  }, [medications]);
 
   // Register service worker
   useEffect(() => {
@@ -108,7 +121,6 @@ const MedicationTracker = () => {
     }, delayInMs);
 
     // Store the timer in localStorage to survive page refreshes
-    // In a real app, you would use IndexedDB for this
     const scheduledNotifications = JSON.parse(localStorage.getItem('scheduledNotifications') || '{}');
     scheduledNotifications[medication.id] = {
       medicationId: medication.id,
@@ -138,7 +150,9 @@ const MedicationTracker = () => {
       // Schedule notifications for all currently due medications
       Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
         const medication = medications.find(med => med.id === medId);
-        scheduleNotification(medication, dueTimeStr);
+        if (medication) {
+          scheduleNotification(medication, dueTimeStr);
+        }
       });
     }
   };
@@ -170,16 +184,18 @@ const MedicationTracker = () => {
     if (notificationsEnabled && swRegistration) {
       Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
         const medication = medications.find(med => med.id === medId);
-        scheduleNotification(medication, dueTimeStr);
+        if (medication) {
+          scheduleNotification(medication, dueTimeStr);
+        }
       });
     }
-  }, [nextDueTimes, notificationsEnabled, swRegistration]);
+  }, [nextDueTimes, notificationsEnabled, swRegistration, medications]);
 
   // Function to handle taking medication
   const takeMedication = (med) => {
     const now = new Date();
     const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-    console.log(`Taking ${med.name} at ${now.toISOString()}`)
+    console.log(`Taking ${med.name} at ${now.toISOString()}`);
     
     // Create a log entry
     const logEntry = {
@@ -300,6 +316,72 @@ const MedicationTracker = () => {
     }
   };
 
+  // Add new medication
+  const addMedication = () => {
+    if (!newMedication.name.trim()) {
+      setExportMessage('Please enter a medication name');
+      setTimeout(() => setExportMessage(''), 3000);
+      return;
+    }
+
+    // Generate a unique ID based on the name
+    const id = newMedication.name.toLowerCase().replace(/\s+/g, '-');
+    
+    // Check if a medication with this name already exists
+    if (medications.some(med => med.name.toLowerCase() === newMedication.name.toLowerCase())) {
+      setExportMessage('A medication with this name already exists');
+      setTimeout(() => setExportMessage(''), 3000);
+      return;
+    }
+    
+    const newMed = {
+      id,
+      name: newMedication.name,
+      interval: parseInt(newMedication.interval, 10) || 8
+    };
+    
+    setMedications([...medications, newMed]);
+    setNewMedication({ name: '', interval: 8 });
+    setIsEditing(false);
+  };
+
+  // Start editing a medication
+  const startEditMedication = (med) => {
+    setEditingMedication({ ...med });
+  };
+
+  // Save edited medication
+  const saveEditedMedication = () => {
+    if (!editingMedication.name.trim()) {
+      setExportMessage('Medication name cannot be empty');
+      setTimeout(() => setExportMessage(''), 3000);
+      return;
+    }
+
+    setMedications(medications.map(med => 
+      med.id === editingMedication.id ? editingMedication : med
+    ));
+    setEditingMedication(null);
+  };
+
+  // Delete medication
+  const deleteMedication = (medId) => {
+    // Remove from medications list
+    setMedications(medications.filter(med => med.id !== medId));
+    
+    // Clean up nextDueTimes
+    const updatedNextDueTimes = { ...nextDueTimes };
+    delete updatedNextDueTimes[medId];
+    setNextDueTimes(updatedNextDueTimes);
+    
+    // Clean up notifiedMeds
+    const updatedNotifiedMeds = { ...notifiedMeds };
+    delete updatedNotifiedMeds[medId];
+    setNotifiedMeds(updatedNotifiedMeds);
+    
+    // Note: We're keeping the medication logs for record-keeping
+  };
+
   return (
     <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
       <div className="mb-8">
@@ -320,40 +402,166 @@ const MedicationTracker = () => {
           </div>
         )}
         
-        <div className="grid grid-cols-3 gap-4">
-          {medications.map((med) => {
-            const timeRemaining = getTimeRemaining(nextDueTimes[med.id]);
-            const buttonClass = timeRemaining.isOverdue 
-              ? "bg-red-500 hover:bg-red-600" 
-              : "bg-blue-500 hover:bg-blue-600";
-            
-            return (
-              <div key={med.id} className="flex flex-col items-center">
-                <button
-                  onClick={() => takeMedication(med)}
-                  className={`${buttonClass} text-white font-bold py-3 px-4 rounded-lg w-full`}
-                >
-                  {med.name}
-                </button>
-                <div className="mt-2 text-center text-sm">
-                  {nextDueTimes[med.id] ? (
-                    timeRemaining.isOverdue ? (
-                      <span className="text-red-600 font-bold">TAKE NOW</span>
-                    ) : (
-                      <span>
-                        {timeRemaining.hours}h {timeRemaining.minutes}m left
-                      </span>
-                    )
+        {/* Medication Management UI */}
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-lg font-semibold">Your Medications</h2>
+            <button 
+              onClick={() => setIsEditing(!isEditing)}
+              className="text-blue-500 flex items-center text-sm"
+            >
+              {isEditing ? 'Done' : 'Manage'}
+            </button>
+          </div>
+          
+          {/* Medication cards */}
+          <div className="grid grid-cols-3 gap-4">
+            {medications.map((med) => {
+              const timeRemaining = getTimeRemaining(nextDueTimes[med.id]);
+              const buttonClass = timeRemaining.isOverdue 
+                ? "bg-red-500 hover:bg-red-600" 
+                : "bg-blue-500 hover:bg-blue-600";
+              
+              return (
+                <div key={med.id} className="flex flex-col">
+                  {isEditing ? (
+                    // Edit mode
+                    <div className="border border-gray-300 rounded-lg p-2 bg-white h-full flex flex-col">
+                      {editingMedication && editingMedication.id === med.id ? (
+                        // Editing this specific medication
+                        <>
+                          <input
+                            type="text"
+                            value={editingMedication.name}
+                            onChange={(e) => setEditingMedication({...editingMedication, name: e.target.value})}
+                            className="border border-gray-300 rounded p-1 mb-1 text-sm"
+                            placeholder="Medication name"
+                          />
+                          <div className="flex items-center mb-1">
+                            <label className="text-xs mr-1">Hours:</label>
+                            <input
+                              type="number"
+                              value={editingMedication.interval}
+                              onChange={(e) => setEditingMedication({...editingMedication, interval: parseInt(e.target.value) || 1})}
+                              className="border border-gray-300 rounded p-1 w-full text-sm"
+                              min="1"
+                              max="72"
+                            />
+                          </div>
+                          <div className="flex justify-between mt-auto pt-1">
+                            <button 
+                              onClick={() => setEditingMedication(null)}
+                              className="p-1 text-gray-500 rounded"
+                            >
+                              <X size={16} />
+                            </button>
+                            <button 
+                              onClick={saveEditedMedication}
+                              className="p-1 text-green-500 rounded"
+                            >
+                              <Check size={16} />
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        // Display with edit/delete options
+                        <>
+                          <div className="font-medium mb-1 truncate">{med.name}</div>
+                          <div className="text-xs text-gray-500 mb-1">Every {med.interval} hours</div>
+                          <div className="flex justify-between mt-auto pt-1">
+                            <button 
+                              onClick={() => deleteMedication(med.id)}
+                              className="p-1 text-red-500 rounded"
+                            >
+                              <X size={16} />
+                            </button>
+                            <button 
+                              onClick={() => startEditMedication(med)}
+                              className="p-1 text-blue-500 rounded"
+                            >
+                              <Edit size={16} />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   ) : (
-                    <span className="text-gray-500">Not taken yet</span>
+                    // Normal mode
+                    <>
+                      <button
+                        onClick={() => takeMedication(med)}
+                        className={`${buttonClass} text-white font-bold py-3 px-4 rounded-lg w-full`}
+                      >
+                        {med.name}
+                      </button>
+                      <div className="mt-2 text-center text-sm">
+                        {nextDueTimes[med.id] ? (
+                          timeRemaining.isOverdue ? (
+                            <span className="text-red-600 font-bold">TAKE NOW</span>
+                          ) : (
+                            <span>
+                              {timeRemaining.hours}h {timeRemaining.minutes}m left
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-gray-500">Not taken yet</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 text-center">
+                        Every {med.interval} hours
+                      </div>
+                    </>
                   )}
                 </div>
-                <div className="text-xs text-gray-500">
-                  Every {med.interval} hours
-                </div>
+              );
+            })}
+            
+            {/* Add new medication button/form */}
+            {isEditing && (
+              <div className="border border-gray-300 border-dashed rounded-lg p-2 flex flex-col items-center justify-center bg-white">
+                {newMedication.name || newMedication.interval !== 8 ? (
+                  // Show form if user has started entering data
+                  <div className="w-full">
+                    <input
+                      type="text"
+                      value={newMedication.name}
+                      onChange={(e) => setNewMedication({...newMedication, name: e.target.value})}
+                      className="border border-gray-300 rounded p-1 mb-1 w-full text-sm"
+                      placeholder="Medication name"
+                    />
+                    <div className="flex items-center mb-2">
+                      <label className="text-xs mr-1">Hours:</label>
+                      <input
+                        type="number"
+                        value={newMedication.interval}
+                        onChange={(e) => setNewMedication({...newMedication, interval: parseInt(e.target.value) || 1})}
+                        className="border border-gray-300 rounded p-1 w-full text-sm"
+                        min="1"
+                        max="72"
+                      />
+                    </div>
+                    <div className="flex justify-end">
+                      <button 
+                        onClick={addMedication}
+                        className="bg-green-500 hover:bg-green-600 text-white text-xs py-1 px-2 rounded"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // Show just the add button initially
+                  <button 
+                    onClick={() => setNewMedication({name: '', interval: 8})}
+                    className="flex flex-col items-center text-blue-500"
+                  >
+                    <PlusCircle size={24} />
+                    <span className="text-xs mt-1">Add Medication</span>
+                  </button>
+                )}
               </div>
-            );
-          })}
+            )}
+          </div>
         </div>
       </div>
       
