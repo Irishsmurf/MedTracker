@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Analytics } from "@vercel/analytics/react";
-import { PlusCircle, X, Edit, Check } from "lucide-react";
+import { PlusCircle, X, Edit, Check, Clock } from "lucide-react";
 
 const MedicationTracker = () => {
   // Initialize medications from localStorage
@@ -13,29 +12,19 @@ const MedicationTracker = () => {
     ];
   });
 
-  // State for managing medication editing
   const [isEditing, setIsEditing] = useState(false);
   const [newMedication, setNewMedication] = useState({ name: '', interval: 8 });
   const [editingMedication, setEditingMedication] = useState(null);
-
-  // Initialize state with data from localStorage
   const [medLogs, setMedLogs] = useState(() => {
     const savedLogs = localStorage.getItem('medLogs');
     return savedLogs ? JSON.parse(savedLogs) : [];
   });
-
   const [nextDueTimes, setNextDueTimes] = useState(() => {
     const savedNextDueTimes = localStorage.getItem('nextDueTimes');
     return savedNextDueTimes ? JSON.parse(savedNextDueTimes) : {};
   });
-
   const [currentTime, setCurrentTime] = useState(new Date());
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [notifiedMeds, setNotifiedMeds] = useState(() => {
-    const savedNotifiedMeds = localStorage.getItem('notifiedMeds');
-    return savedNotifiedMeds ? JSON.parse(savedNotifiedMeds) : {};
-  });
-  const [swRegistration, setSwRegistration] = useState(null);
   const [exportMessage, setExportMessage] = useState('');
 
   // Save medications to localStorage when they change
@@ -43,159 +32,28 @@ const MedicationTracker = () => {
     localStorage.setItem('medications', JSON.stringify(medications));
   }, [medications]);
 
-  // Register service worker
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/service-worker.js')
-        .then(registration => {
-          console.log('Service Worker registered with scope:', registration.scope);
-          setSwRegistration(registration);
-        })
-        .catch(error => {
-          console.error('Service Worker registration failed:', error);
-        });
-    }
-  }, []);
-
-  // Request notification permission
-  const requestNotificationPermission = async () => {
-    if (!("Notification" in window)) {
-      alert("This browser does not support desktop notifications");
-      return false;
-    }
-    
-    if (Notification.permission === "granted") {
-      setNotificationsEnabled(true);
-      return true;
-    }
-    
-    if (Notification.permission !== "denied") {
-      const permission = await Notification.requestPermission();
-      const granted = permission === "granted";
-      setNotificationsEnabled(granted);
-      return granted;
-    }
-    
-    return false;
-  };
-
-  // Function to schedule a notification
-  const scheduleNotification = async (medication, dueTime) => {
-    if (!swRegistration || !notificationsEnabled) return;
-
-    // Calculate when to show the notification (at due time)
-    const now = new Date();
-    const dueDate = new Date(dueTime);
-    const delayInMs = Math.max(0, dueDate.getTime() - now.getTime());
-
-    // Store the timer ID so we can cancel it if medication is taken early
-    const timerId = setTimeout(() => {
-      // Check if still due (might have been taken early)
-      const currentDueTime = nextDueTimes[medication.id];
-      if (currentDueTime === dueTime) {
-        // Show notification directly if browser is open
-        if (document.visibilityState === 'visible') {
-          new Notification(`Time to take ${medication.name}`, {
-            body: `Your ${medication.name} is now due.`,
-            icon: "/favicon.ico"
-          });
-        } 
-        // Otherwise use service worker for background notification
-        else if (swRegistration.showNotification) {
-          swRegistration.showNotification(`Time to take ${medication.name}`, {
-            body: `Your ${medication.name} is now due.`,
-            icon: '/favicon.ico',
-            badge: '/favicon.ico',
-            data: {
-              url: window.location.href
-            }
-          });
-        }
-        
-        // Mark as notified
-        setNotifiedMeds(prev => ({
-          ...prev,
-          [medication.id]: dueTime
-        }));
-      }
-    }, delayInMs);
-
-    // Store the timer in localStorage to survive page refreshes
-    const scheduledNotifications = JSON.parse(localStorage.getItem('scheduledNotifications') || '{}');
-    scheduledNotifications[medication.id] = {
-      medicationId: medication.id,
-      dueTime: dueTime,
-      timerId: timerId.toString()
-    };
-    localStorage.setItem('scheduledNotifications', JSON.stringify(scheduledNotifications));
-  };
-
-  // Enable notifications
-  const enableNotifications = async () => {
-    const granted = await requestNotificationPermission();
-    if (granted) {
-      // Create a test notification
-      if (swRegistration) {
-        swRegistration.showNotification("Medication Tracker", {
-          body: "Notifications enabled successfully!",
-          icon: "/favicon.ico"
-        });
-      } else {
-        new Notification("Medication Tracker", {
-          body: "Notifications enabled successfully!",
-          icon: "/favicon.ico"
-        });
-      }
-
-      // Schedule notifications for all currently due medications
-      Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
-        const medication = medications.find(med => med.id === medId);
-        if (medication) {
-          scheduleNotification(medication, dueTimeStr);
-        }
-      });
-    }
-  };
-
   // Update current time every minute
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 60000);
+    }, 10000); // Update every 10 seconds for smoother progress
     
     return () => clearInterval(timer);
   }, []);
-
-  // Save notified meds to localStorage
-  useEffect(() => {
-    localStorage.setItem('notifiedMeds', JSON.stringify(notifiedMeds));
-  }, [notifiedMeds]);
 
   // Save data to localStorage whenever it changes
   useEffect(() => {
     localStorage.setItem('medLogs', JSON.stringify(medLogs));
   }, [medLogs]);
 
-  // When nextDueTimes changes, schedule notifications
   useEffect(() => {
     localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes));
-    
-    // Schedule notifications if enabled
-    if (notificationsEnabled && swRegistration) {
-      Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
-        const medication = medications.find(med => med.id === medId);
-        if (medication) {
-          scheduleNotification(medication, dueTimeStr);
-        }
-      });
-    }
-  }, [nextDueTimes, notificationsEnabled, swRegistration, medications]);
+  }, [nextDueTimes]);
 
   // Function to handle taking medication
   const takeMedication = (med) => {
     const now = new Date();
     const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-    console.log(`Taking ${med.name} at ${now.toISOString()}`);
     
     // Create a log entry
     const logEntry = {
@@ -214,109 +72,33 @@ const MedicationTracker = () => {
     });
   };
 
-  // Helper function to format date
-  const formatTime = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + 
-           ' ' + date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
-
-  // Function to calculate time remaining
-  const getTimeRemaining = (dueTimeString) => {
-    if (!dueTimeString) return { hours: 0, minutes: 0, isOverdue: false };
+  // Function to calculate time remaining and progress
+  const getTimeRemaining = (dueTimeString, interval) => {
+    if (!dueTimeString) return { hours: 0, minutes: 0, isOverdue: false, progress: 0 };
     
     const dueTime = new Date(dueTimeString);
+    const takenTime = new Date(dueTime - interval * 60 * 60 * 1000);
+    const totalDuration = interval * 60 * 60 * 1000;
+    const elapsed = currentTime - takenTime;
     const diff = dueTime - currentTime;
     
     if (diff <= 0) {
-      return { hours: 0, minutes: 0, isOverdue: true };
+      return { hours: 0, minutes: 0, isOverdue: true, progress: 100 };
     }
     
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
     
-    return { hours, minutes, isOverdue: false };
-  };
-  
-  // Generate CSV data from medLogs
-  const generateCSV = () => {
-    if (medLogs.length === 0) return '';
-    
-    // Define headers
-    const headers = ['Medication', 'Taken At', 'Next Due At'];
-    
-    // Create CSV rows
-    const rows = medLogs.map(log => [
-      log.medicationName,
-      new Date(log.takenAt).toLocaleString(),
-      new Date(log.nextDueAt).toLocaleString()
-    ]);
-    
-    // Combine headers and rows
-    return [headers, ...rows].map(row => row.join(',')).join('\n');
-  };
-  
-  // Generate TSV data from medLogs
-  const generateTSV = () => {
-    if (medLogs.length === 0) return '';
-    
-    // Define headers
-    const headers = ['Medication', 'Taken At', 'Next Due At'];
-    
-    // Create TSV rows
-    const rows = medLogs.map(log => [
-      log.medicationName,
-      new Date(log.takenAt).toLocaleString(),
-      new Date(log.nextDueAt).toLocaleString()
-    ]);
-    
-    // Combine headers and rows
-    return [headers, ...rows].map(row => row.join('\t')).join('\n');
-  };
-  
-  // Export CSV file
-  const exportCSV = () => {
-    const csvData = generateCSV();
-    if (!csvData) {
-      setExportMessage('No data to export');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
-    
-    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `medication-log-${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    setExportMessage('CSV exported successfully');
-    setTimeout(() => setExportMessage(''), 3000);
-  };
-  
-  // Copy TSV to clipboard
-  const copyToClipboard = async () => {
-    const tsvData = generateTSV();
-    if (!tsvData) {
-      setExportMessage('No data to copy');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
-    
-    try {
-      await navigator.clipboard.writeText(tsvData);
-      setExportMessage('Copied to clipboard');
-      setTimeout(() => setExportMessage(''), 3000);
-    } catch (err) {
-      console.error('Failed to copy: ', err);
-      setExportMessage('Failed to copy to clipboard');
-      setTimeout(() => setExportMessage(''), 3000);
-    }
+    return { hours, minutes, isOverdue: false, progress };
   };
 
-  // Add new medication
+  const enableNotifications = () => {
+    setNotificationsEnabled(true);
+    setExportMessage('Notifications enabled!');
+    setTimeout(() => setExportMessage(''), 3000);
+  };
+
   const addMedication = () => {
     if (!newMedication.name.trim()) {
       setExportMessage('Please enter a medication name');
@@ -324,10 +106,8 @@ const MedicationTracker = () => {
       return;
     }
 
-    // Generate a unique ID based on the name
     const id = newMedication.name.toLowerCase().replace(/\s+/g, '-');
     
-    // Check if a medication with this name already exists
     if (medications.some(med => med.name.toLowerCase() === newMedication.name.toLowerCase())) {
       setExportMessage('A medication with this name already exists');
       setTimeout(() => setExportMessage(''), 3000);
@@ -345,12 +125,10 @@ const MedicationTracker = () => {
     setIsEditing(false);
   };
 
-  // Start editing a medication
   const startEditMedication = (med) => {
     setEditingMedication({ ...med });
   };
 
-  // Save edited medication
   const saveEditedMedication = () => {
     if (!editingMedication.name.trim()) {
       setExportMessage('Medication name cannot be empty');
@@ -364,22 +142,18 @@ const MedicationTracker = () => {
     setEditingMedication(null);
   };
 
-  // Delete medication
   const deleteMedication = (medId) => {
-    // Remove from medications list
     setMedications(medications.filter(med => med.id !== medId));
     
-    // Clean up nextDueTimes
     const updatedNextDueTimes = { ...nextDueTimes };
     delete updatedNextDueTimes[medId];
     setNextDueTimes(updatedNextDueTimes);
-    
-    // Clean up notifiedMeds
-    const updatedNotifiedMeds = { ...notifiedMeds };
-    delete updatedNotifiedMeds[medId];
-    setNotifiedMeds(updatedNotifiedMeds);
-    
-    // Note: We're keeping the medication logs for record-keeping
+  };
+
+  // Format time for display
+  const formatTime = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   return (
@@ -415,12 +189,14 @@ const MedicationTracker = () => {
           </div>
           
           {/* Medication cards */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             {medications.map((med) => {
-              const timeRemaining = getTimeRemaining(nextDueTimes[med.id]);
-              const buttonClass = timeRemaining.isOverdue 
-                ? "bg-red-500 hover:bg-red-600" 
-                : "bg-blue-500 hover:bg-blue-600";
+              const timeInfo = getTimeRemaining(nextDueTimes[med.id], med.interval);
+              const progressColor = timeInfo.isOverdue 
+                ? "stroke-red-500" 
+                : timeInfo.progress < 30 ? "stroke-green-500" 
+                : timeInfo.progress < 70 ? "stroke-yellow-500" 
+                : "stroke-orange-500";
               
               return (
                 <div key={med.id} className="flex flex-col">
@@ -486,31 +262,58 @@ const MedicationTracker = () => {
                       )}
                     </div>
                   ) : (
-                    // Normal mode
-                    <>
+                    // Normal mode with circular progress indicator
+                    <div className="relative">
+                      {/* Circular progress background */}
+                      <svg className="absolute top-0 left-0 w-full h-full -rotate-90" viewBox="0 0 100 100">
+                        <circle
+                          cx="50"
+                          cy="50"
+                          r="42"
+                          fill="transparent"
+                          stroke="#e5e7eb"
+                          strokeWidth="8"
+                        />
+                        {nextDueTimes[med.id] && (
+                          <circle
+                            cx="50"
+                            cy="50"
+                            r="42"
+                            fill="transparent"
+                            className={progressColor}
+                            strokeWidth="8"
+                            strokeLinecap="round"
+                            strokeDasharray="264"
+                            strokeDashoffset={264 - (264 * timeInfo.progress / 100)}
+                          />
+                        )}
+                      </svg>
+                      
+                      {/* Button inside circle */}
                       <button
                         onClick={() => takeMedication(med)}
-                        className={`${buttonClass} text-white font-bold py-3 px-4 rounded-lg w-full`}
+                        className="relative w-full h-32 bg-white rounded-full flex flex-col items-center justify-center border-2 shadow-sm overflow-hidden"
                       >
-                        {med.name}
-                      </button>
-                      <div className="mt-2 text-center text-sm">
-                        {nextDueTimes[med.id] ? (
-                          timeRemaining.isOverdue ? (
-                            <span className="text-red-600 font-bold">TAKE NOW</span>
-                          ) : (
+                        <span className="font-bold text-lg">{med.name}</span>
+                        
+                        {timeInfo.isOverdue ? (
+                          <span className="text-red-600 font-bold text-sm">TAKE NOW</span>
+                        ) : nextDueTimes[med.id] ? (
+                          <div className="mt-2 text-center text-sm flex items-center justify-center">
+                            <Clock size={14} className="mr-1" />
                             <span>
-                              {timeRemaining.hours}h {timeRemaining.minutes}m left
+                              {timeInfo.hours}h {timeInfo.minutes}m
                             </span>
-                          )
+                          </div>
                         ) : (
-                          <span className="text-gray-500">Not taken yet</span>
+                          <span className="mt-1 text-sm text-gray-500">Not taken yet</span>
                         )}
-                      </div>
-                      <div className="text-xs text-gray-500 text-center">
-                        Every {med.interval} hours
-                      </div>
-                    </>
+                        
+                        <span className="text-xs text-gray-400 mt-1">
+                          Every {med.interval}h
+                        </span>
+                      </button>
+                    </div>
                   )}
                 </div>
               );
@@ -518,7 +321,7 @@ const MedicationTracker = () => {
             
             {/* Add new medication button/form */}
             {isEditing && (
-              <div className="border border-gray-300 border-dashed rounded-lg p-2 flex flex-col items-center justify-center bg-white">
+              <div className="border border-gray-300 border-dashed rounded-lg p-2 flex flex-col items-center justify-center bg-white h-32">
                 {newMedication.name || newMedication.interval !== 8 ? (
                   // Show form if user has started entering data
                   <div className="w-full">
@@ -565,25 +368,10 @@ const MedicationTracker = () => {
         </div>
       </div>
       
+      {/* Simplified Medication Log */}
       <div>
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Medication Log</h2>
-          <div className="flex space-x-2">
-            <button
-              onClick={exportCSV}
-              className="bg-green-500 hover:bg-green-600 text-white text-sm py-1 px-3 rounded"
-              disabled={medLogs.length === 0}
-            >
-              Export CSV
-            </button>
-            <button
-              onClick={copyToClipboard}
-              className="bg-purple-500 hover:bg-purple-600 text-white text-sm py-1 px-3 rounded"
-              disabled={medLogs.length === 0}
-            >
-              Copy TSV
-            </button>
-          </div>
+          <h2 className="text-xl font-semibold">Recent Doses</h2>
         </div>
         
         {exportMessage && (
@@ -595,24 +383,29 @@ const MedicationTracker = () => {
         {medLogs.length === 0 ? (
           <p className="text-gray-500 text-center">No medications logged yet</p>
         ) : (
-          <div className="space-y-3">
-            {medLogs.map((log) => (
-              <div key={log.id} className="bg-white p-3 rounded-md shadow-sm">
-                <div className="font-medium">{log.medicationName}</div>
-                <div className="text-sm">
-                  <span className="text-gray-600">Taken: </span>
-                  {formatTime(log.takenAt)}
+          <div className="space-y-2">
+            {medLogs.slice(0, 3).map((log) => (
+              <div key={log.id} className="bg-white p-3 rounded-md shadow-sm flex justify-between">
+                <div>
+                  <span className="font-medium">{log.medicationName}</span>
+                  <div className="text-xs text-gray-500">
+                    {new Date(log.takenAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                  </div>
                 </div>
-                <div className="text-sm">
-                  <span className="text-gray-600">Next dose: </span>
-                  {formatTime(log.nextDueAt)}
+                <div className="text-xs text-right">
+                  <div className="text-gray-400">Next dose</div>
+                  <div>{formatTime(log.nextDueAt)}</div>
                 </div>
               </div>
             ))}
+            {medLogs.length > 3 && (
+              <div className="text-center text-sm text-blue-500">
+                {medLogs.length - 3} more entries...
+              </div>
+            )}
           </div>
         )}
       </div>
-      <Analytics />
     </div>
   );
 };
