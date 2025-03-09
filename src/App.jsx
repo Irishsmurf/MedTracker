@@ -6,7 +6,8 @@ const MedicationTracker = () => {
   const medications = [
     { id: 'codeine', name: 'Codeine', interval: 6 },
     { id: 'ibuprofen', name: 'Ibuprofen', interval: 8 },
-    { id: 'diclac', name: 'Diclac', interval: 16 }
+    // { id: 'diclac', name: 'Diclac', interval: 16 },
+    { id: 'augmentin', name: 'Augmentin', interval: 8 },
   ];
 
   // Initialize state with data from localStorage
@@ -177,6 +178,7 @@ const MedicationTracker = () => {
   const takeMedication = (med) => {
     const now = new Date();
     const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
+    console.log(`Taking ${med.name} at ${now.toISOString()}`)
     
     // Create a log entry
     const logEntry = {
