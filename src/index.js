@@ -9,5 +9,3 @@ root.render(
     <App />
   </React.StrictMode>
 );
-
-// Service worker registration moved to the component for better control

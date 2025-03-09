@@ -22,125 +22,6 @@ const MedicationTracker = () => {
   });
 
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [notifiedMeds, setNotifiedMeds] = useState(() => {
-    const savedNotifiedMeds = localStorage.getItem('notifiedMeds');
-    return savedNotifiedMeds ? JSON.parse(savedNotifiedMeds) : {};
-  });
-  const [swRegistration, setSwRegistration] = useState(null);
-
-  // Register service worker
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/service-worker.js')
-        .then(registration => {
-          console.log('Service Worker registered with scope:', registration.scope);
-          setSwRegistration(registration);
-        })
-        .catch(error => {
-          console.error('Service Worker registration failed:', error);
-        });
-    }
-  }, []);
-
-  // Request notification permission
-  const requestNotificationPermission = async () => {
-    if (!("Notification" in window)) {
-      alert("This browser does not support desktop notifications");
-      return false;
-    }
-    
-    if (Notification.permission === "granted") {
-      setNotificationsEnabled(true);
-      return true;
-    }
-    
-    if (Notification.permission !== "denied") {
-      const permission = await Notification.requestPermission();
-      const granted = permission === "granted";
-      setNotificationsEnabled(granted);
-      return granted;
-    }
-    
-    return false;
-  };
-
-  // Function to schedule a notification
-  const scheduleNotification = async (medication, dueTime) => {
-    if (!swRegistration || !notificationsEnabled) return;
-
-    // Calculate when to show the notification (at due time)
-    const now = new Date();
-    const dueDate = new Date(dueTime);
-    const delayInMs = Math.max(0, dueDate.getTime() - now.getTime());
-
-    // Store the timer ID so we can cancel it if medication is taken early
-    const timerId = setTimeout(() => {
-      // Check if still due (might have been taken early)
-      const currentDueTime = nextDueTimes[medication.id];
-      if (currentDueTime === dueTime) {
-        // Show notification directly if browser is open
-        if (document.visibilityState === 'visible') {
-          new Notification(`Time to take ${medication.name}`, {
-            body: `Your ${medication.name} is now due.`,
-            icon: "/favicon.ico"
-          });
-        } 
-        // Otherwise use service worker for background notification
-        else if (swRegistration.showNotification) {
-          swRegistration.showNotification(`Time to take ${medication.name}`, {
-            body: `Your ${medication.name} is now due.`,
-            icon: '/favicon.ico',
-            badge: '/favicon.ico',
-            data: {
-              url: window.location.href
-            }
-          });
-        }
-        
-        // Mark as notified
-        setNotifiedMeds(prev => ({
-          ...prev,
-          [medication.id]: dueTime
-        }));
-      }
-    }, delayInMs);
-
-    // Store the timer in localStorage to survive page refreshes
-    // In a real app, you would use IndexedDB for this
-    const scheduledNotifications = JSON.parse(localStorage.getItem('scheduledNotifications') || '{}');
-    scheduledNotifications[medication.id] = {
-      medicationId: medication.id,
-      dueTime: dueTime,
-      timerId: timerId.toString()
-    };
-    localStorage.setItem('scheduledNotifications', JSON.stringify(scheduledNotifications));
-  };
-
-  // Enable notifications
-  const enableNotifications = async () => {
-    const granted = await requestNotificationPermission();
-    if (granted) {
-      // Create a test notification
-      if (swRegistration) {
-        swRegistration.showNotification("Medication Tracker", {
-          body: "Notifications enabled successfully!",
-          icon: "/favicon.ico"
-        });
-      } else {
-        new Notification("Medication Tracker", {
-          body: "Notifications enabled successfully!",
-          icon: "/favicon.ico"
-        });
-      }
-
-      // Schedule notifications for all currently due medications
-      Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
-        const medication = medications.find(med => med.id === medId);
-        scheduleNotification(medication, dueTimeStr);
-      });
-    }
-  };
 
   // Update current time every minute
   useEffect(() => {
@@ -151,28 +32,10 @@ const MedicationTracker = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Save notified meds to localStorage
-  useEffect(() => {
-    localStorage.setItem('notifiedMeds', JSON.stringify(notifiedMeds));
-  }, [notifiedMeds]);
-
   // Save data to localStorage whenever it changes
   useEffect(() => {
     localStorage.setItem('medLogs', JSON.stringify(medLogs));
   }, [medLogs]);
-
-  // When nextDueTimes changes, schedule notifications
-  useEffect(() => {
-    localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes));
-    
-    // Schedule notifications if enabled
-    if (notificationsEnabled && swRegistration) {
-      Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
-        const medication = medications.find(med => med.id === medId);
-        scheduleNotification(medication, dueTimeStr);
-      });
-    }
-  }, [nextDueTimes, notificationsEnabled, swRegistration]);
 
   // Function to handle taking medication
   const takeMedication = (med) => {
@@ -264,22 +127,6 @@ const MedicationTracker = () => {
     <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-center mb-6">Post-Op Medication Tracker</h1>
-        
-        {/* Notification permission button */}
-        {!notificationsEnabled && (
-          <div className="mb-4 bg-blue-50 p-3 rounded-lg border border-blue-200">
-            <p className="text-sm text-blue-800 mb-2">
-              Enable notifications to be alerted when medications are due.
-            </p>
-            <button
-              onClick={enableNotifications}
-              className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 px-3 rounded"
-            >
-              Enable Notifications
-            </button>
-          </div>
-        )}
-        
         <div className="grid grid-cols-3 gap-4">
           {medications.map((med) => {
             const timeRemaining = getTimeRemaining(nextDueTimes[med.id]);
