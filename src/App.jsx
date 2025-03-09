@@ -221,6 +221,45 @@ const MedicationTracker = () => {
     return { hours, minutes, isOverdue: false };
   };
 
+  // Function to export medication logs as CSV
+  const exportLogsAsCSV = () => {
+    if (medLogs.length === 0) {
+      alert("No medication logs to export");
+      return;
+    }
+    
+    // CSV header
+    const csvHeader = ["Medication", "Taken At", "Next Due At"];
+    
+    // Format logs for CSV
+    const csvData = medLogs.map(log => [
+      log.medicationName,
+      new Date(log.takenAt).toLocaleString(),
+      new Date(log.nextDueAt).toLocaleString()
+    ]);
+    
+    // Combine header and data
+    const csvContent = [
+      csvHeader.join(","),
+      ...csvData.map(row => row.join(","))
+    ].join("\n");
+    
+    // Create a Blob and download link
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    
+    // Set up download attributes
+    const dateStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+    link.setAttribute("href", url);
+    link.setAttribute("download", `medication-log-${dateStr}.csv`);
+    
+    // Append to document, trigger download, and clean up
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
       <div className="mb-8">
@@ -279,7 +318,25 @@ const MedicationTracker = () => {
       </div>
       
       <div>
-        <h2 className="text-xl font-semibold mb-4">Medication Log</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">Medication Log</h2>
+          
+          {/* Export button */}
+          {medLogs.length > 0 && (
+            <button
+              onClick={exportLogsAsCSV}
+              className="bg-green-500 hover:bg-green-600 text-white text-sm py-1 px-3 rounded flex items-center"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              Export CSV
+            </button>
+          )}
+        </div>
+        
         {medLogs.length === 0 ? (
           <p className="text-gray-500 text-center">No medications logged yet</p>
         ) : (
