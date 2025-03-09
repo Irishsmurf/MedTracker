@@ -28,6 +28,7 @@ const MedicationTracker = () => {
     return savedNotifiedMeds ? JSON.parse(savedNotifiedMeds) : {};
   });
   const [swRegistration, setSwRegistration] = useState(null);
+  const [exportMessage, setExportMessage] = useState('');
 
   // Register service worker
   useEffect(() => {
@@ -220,6 +221,84 @@ const MedicationTracker = () => {
     
     return { hours, minutes, isOverdue: false };
   };
+  
+  // Generate CSV data from medLogs
+  const generateCSV = () => {
+    if (medLogs.length === 0) return '';
+    
+    // Define headers
+    const headers = ['Medication', 'Taken At', 'Next Due At'];
+    
+    // Create CSV rows
+    const rows = medLogs.map(log => [
+      log.medicationName,
+      new Date(log.takenAt).toLocaleString(),
+      new Date(log.nextDueAt).toLocaleString()
+    ]);
+    
+    // Combine headers and rows
+    return [headers, ...rows].map(row => row.join(',')).join('\n');
+  };
+  
+  // Generate TSV data from medLogs
+  const generateTSV = () => {
+    if (medLogs.length === 0) return '';
+    
+    // Define headers
+    const headers = ['Medication', 'Taken At', 'Next Due At'];
+    
+    // Create TSV rows
+    const rows = medLogs.map(log => [
+      log.medicationName,
+      new Date(log.takenAt).toLocaleString(),
+      new Date(log.nextDueAt).toLocaleString()
+    ]);
+    
+    // Combine headers and rows
+    return [headers, ...rows].map(row => row.join('\t')).join('\n');
+  };
+  
+  // Export CSV file
+  const exportCSV = () => {
+    const csvData = generateCSV();
+    if (!csvData) {
+      setExportMessage('No data to export');
+      setTimeout(() => setExportMessage(''), 3000);
+      return;
+    }
+    
+    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `medication-log-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    setExportMessage('CSV exported successfully');
+    setTimeout(() => setExportMessage(''), 3000);
+  };
+  
+  // Copy TSV to clipboard
+  const copyToClipboard = async () => {
+    const tsvData = generateTSV();
+    if (!tsvData) {
+      setExportMessage('No data to copy');
+      setTimeout(() => setExportMessage(''), 3000);
+      return;
+    }
+    
+    try {
+      await navigator.clipboard.writeText(tsvData);
+      setExportMessage('Copied to clipboard');
+      setTimeout(() => setExportMessage(''), 3000);
+    } catch (err) {
+      console.error('Failed to copy: ', err);
+      setExportMessage('Failed to copy to clipboard');
+      setTimeout(() => setExportMessage(''), 3000);
+    }
+  };
 
   return (
     <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
@@ -279,7 +358,32 @@ const MedicationTracker = () => {
       </div>
       
       <div>
-        <h2 className="text-xl font-semibold mb-4">Medication Log</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">Medication Log</h2>
+          <div className="flex space-x-2">
+            <button
+              onClick={exportCSV}
+              className="bg-green-500 hover:bg-green-600 text-white text-sm py-1 px-3 rounded"
+              disabled={medLogs.length === 0}
+            >
+              Export CSV
+            </button>
+            <button
+              onClick={copyToClipboard}
+              className="bg-purple-500 hover:bg-purple-600 text-white text-sm py-1 px-3 rounded"
+              disabled={medLogs.length === 0}
+            >
+              Copy TSV
+            </button>
+          </div>
+        </div>
+        
+        {exportMessage && (
+          <div className="mb-3 bg-green-100 text-green-800 p-2 rounded text-center text-sm">
+            {exportMessage}
+          </div>
+        )}
+        
         {medLogs.length === 0 ? (
           <p className="text-gray-500 text-center">No medications logged yet</p>
         ) : (
