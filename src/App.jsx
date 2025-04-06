@@ -250,8 +250,120 @@ const App = () => {
   const handleDialogChange = useCallback((open) => { setIsDialogOpen(open); if (!open) { setEditingMedication(null); } }, []);
   const handleLoadMoreLogs = useCallback(() => { setVisibleLogCount(prevCount => prevCount + LOGS_PER_PAGE); }, []);
   // --- Log Action Handlers ---
-  const handleCopyLog = useCallback(() => { /* ... */ }, [medLogs]);
-  const handleExportCSV = useCallback(() => { /* ... */ }, [medLogs]);
+  // --- Log Action Handlers (MODIFIED with Debugging Logs) ---
+  const handleCopyLog = useCallback(() => {
+    console.log("handleCopyLog triggered."); // Log: Start
+    console.log("Current medLogs:", medLogs); // Log: Data Input
+
+    if (!medLogs || medLogs.length === 0) {
+        console.log("CopyLog: Log is empty or invalid.");
+        toast.warning("Log is empty", { description: "There are no medication logs to copy." });
+        return;
+    }
+
+    try {
+        // Format log data for clipboard
+        const formattedLog = medLogs
+            .map((log, index) => {
+                // Log individual log item data being processed
+                // console.log(`CopyLog Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
+                // Ensure dates are valid before formatting
+                const takenTime = log.takenAt ? formatTime(log.takenAt, true) : 'N/A';
+                const dueTime = log.nextDueAt ? formatTime(log.nextDueAt, true) : 'N/A';
+                return `${log.medicationName} - Taken: ${takenTime} - Next Due: ${dueTime}`;
+            })
+            .join('\n'); // Newline separated
+
+        console.log("CopyLog: Formatted log string length:", formattedLog.length); // Log: Formatted data
+        // console.log("CopyLog: Formatted log content:\n", formattedLog); // Log: Uncomment to see full content
+
+        if (!formattedLog) {
+             console.error("CopyLog: Formatted log string is empty!");
+             toast.error("Copy failed", { description: "Could not format log data."});
+             return;
+        }
+
+        // Use Clipboard API
+        navigator.clipboard.writeText(formattedLog)
+            .then(() => {
+                console.log("CopyLog: writeText successful."); // Log: Success
+                toast.success("Log copied to clipboard!");
+            })
+            .catch(err => {
+                console.error('CopyLog: writeText failed: ', err); // Log: Error
+                toast.error("Copy failed", { description: "Could not access clipboard. Check browser permissions." });
+            });
+
+    } catch (error) {
+        console.error("CopyLog: Error during formatting or copy:", error);
+        toast.error("Copy failed", { description: "An unexpected error occurred." });
+    }
+
+  }, [medLogs]); // Depends on medLogs
+
+  const handleExportCSV = useCallback(() => {
+    console.log("handleExportCSV triggered."); // Log: Start
+    console.log("Current medLogs:", medLogs); // Log: Data Input
+
+    if (!medLogs || medLogs.length === 0) {
+        console.log("ExportCSV: Log is empty or invalid.");
+        toast.warning("Log is empty", { description: "There are no medication logs to export." });
+        return;
+    }
+
+    try {
+        // CSV Header
+        const header = ['Medication Name', 'Taken At (ISO)', 'Next Due At (ISO)'];
+        // CSV Rows
+        const rows = medLogs.map((log, index) => {
+            // Log individual log item data being processed
+            // console.log(`ExportCSV Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
+            // Ensure values exist, default to empty string if not
+            const name = log.medicationName || '';
+            const takenAt = log.takenAt || '';
+            const nextDueAt = log.nextDueAt || '';
+            // Quote name and escape quotes within name
+            return [`"${name.replace(/"/g, '""')}"`, takenAt, nextDueAt];
+        });
+
+        // Combine header and rows
+        const csvContent = [header.join(','), ...rows.map(row => row.join(','))].join('\n');
+        console.log("ExportCSV: Generated CSV content length:", csvContent.length); // Log: Generated CSV
+        // console.log("ExportCSV: CSV content:\n", csvContent); // Log: Uncomment to see full content
+
+        if (!csvContent) {
+            console.error("ExportCSV: Generated CSV content is empty!");
+            toast.error("Export failed", { description: "Could not generate CSV data."});
+            return;
+        }
+
+        // Create Blob and Download Link
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+
+        // Check for download attribute support
+        if (link.download !== undefined) {
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `medication_log_${new Date().toISOString().split('T')[0]}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            console.log("ExportCSV: Triggering download link click..."); // Log: Before click
+            link.click();
+            console.log("ExportCSV: Download link clicked."); // Log: After click
+            // Cleanup
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            toast.success("Log exported as CSV!");
+        } else {
+            console.error("ExportCSV: link.download attribute not supported.");
+            toast.error("Export failed", { description: "CSV export is not supported in this browser." });
+        }
+    } catch (error) {
+        console.error("ExportCSV: Error during CSV generation or download:", error);
+        toast.error("Export failed", { description: "An unexpected error occurred." });
+    }
+  }, [medLogs]); // Depends on medLogs
   // --- End Handlers ---
 
   // --- Render Logic ---
