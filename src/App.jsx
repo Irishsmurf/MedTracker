@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { PlusCircle, X, Edit, Check, Trash2, Pill } from "lucide-react";
+import { PlusCircle, X, Edit, Check, Clock, Trash2, Pill } from "lucide-react";
 import { cn } from "@/lib/utils"; // [cite: 17]
 
 // --- Shadcn/ui Components ---
@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/dialog";
 
 // --- Sonner Toast Components ---
-import { Toaster as SonnerToaster, toast } from "sonner"; // Import toast function from sonner
+import { Toaster as SonnerToaster, toast } from "sonner";
 // --- End Sonner Toast Components ---
 
 // --- Helper Functions ---
@@ -59,7 +59,7 @@ const calculateTimeInfo = (dueTimeString, intervalHours, currentTime) => {
 
 // --- Child Components ---
 
-// Medication Card Component (No changes needed for toast)
+// Medication Card Component (No changes here)
 const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onEdit, isManageMode, onDelete }) => {
   const timeInfo = calculateTimeInfo(nextDueTimes[med.id], med.interval, currentTime);
 
@@ -140,12 +140,11 @@ const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onE
   );
 });
 
-// Add/Edit Medication Dialog Component (Updated to use Sonner toast)
+// Add/Edit Medication Dialog Component (No changes here)
 const AddEditMedicationDialog = ({ open, onOpenChange, medication, onSave, medications }) => {
   const [name, setName] = useState('');
   const [interval, setIntervalValue] = useState(8);
   const [error, setError] = useState('');
-  // No need for useToast hook anymore
   const isEditing = medication !== null;
 
   useEffect(() => {
@@ -184,7 +183,6 @@ const AddEditMedicationDialog = ({ open, onOpenChange, medication, onSave, medic
     };
 
     onSave(medData, isEditing);
-    // Use Sonner's toast function
     toast.success(`Medication ${isEditing ? 'updated' : 'added'}`, {
         description: `${medData.name} (every ${medData.interval} hours) has been saved.`,
     });
@@ -243,7 +241,6 @@ const AddEditMedicationDialog = ({ open, onOpenChange, medication, onSave, medic
 
 // --- Main App Component ---
 const MedicationTracker = () => {
-  // No useToast hook needed here
 
   // --- State Initialization (remains the same) ---
   const [medications, setMedications] = useState(() => {
@@ -287,27 +284,15 @@ const MedicationTracker = () => {
   useEffect(() => { localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes)); }, [nextDueTimes]);
   // --- End Effects ---
 
-  // --- Event Handlers (Updated to use Sonner toast) ---
+  // --- Event Handlers (remain the same) ---
   const handleTakeMedication = useCallback((med) => {
     const now = new Date();
     const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-
-    const logEntry = {
-      id: Date.now(),
-      medicationId: med.id,
-      medicationName: med.name,
-      takenAt: now.toISOString(),
-      nextDueAt: nextDue.toISOString()
-    };
-
+    const logEntry = { id: Date.now(), medicationId: med.id, medicationName: med.name, takenAt: now.toISOString(), nextDueAt: nextDue.toISOString() };
     setMedLogs(prevLogs => [logEntry, ...prevLogs]);
     setNextDueTimes(prevTimes => ({ ...prevTimes, [med.id]: nextDue.toISOString() }));
-
-    // Use Sonner's toast function
-    toast.info("Medication Taken", { // Using info style
-      description: `${med.name} logged at ${formatTime(now.toISOString())}. Next dose at ${formatTime(nextDue.toISOString())}.`,
-    });
-  }, []); // Removed toast hook dependency
+    toast.info("Medication Taken", { description: `${med.name} logged at ${formatTime(now.toISOString())}. Next dose at ${formatTime(nextDue.toISOString())}.` });
+  }, []);
 
   const handleSaveMedication = useCallback((medData, isEditing) => {
     if (isEditing) {
@@ -316,43 +301,19 @@ const MedicationTracker = () => {
       setMedications(prevMeds => [...prevMeds, medData]);
     }
     setEditingMedication(null);
-    // Toast is now called inside AddEditMedicationDialog
   }, []);
 
    const handleDeleteMedication = useCallback((medIdToDelete) => {
       const medToDelete = medications.find(med => med.id === medIdToDelete);
       const medName = medToDelete ? medToDelete.name : 'Medication';
-
       setMedications(prevMeds => prevMeds.filter(med => med.id !== medIdToDelete));
-      setNextDueTimes(prevTimes => {
-        const updatedTimes = { ...prevTimes };
-        delete updatedTimes[medIdToDelete];
-        return updatedTimes;
-      });
+      setNextDueTimes(prevTimes => { const updatedTimes = { ...prevTimes }; delete updatedTimes[medIdToDelete]; return updatedTimes; });
+      toast.error("Medication Deleted", { description: `${medName} has been removed.` });
+   }, [medications]);
 
-      // Use Sonner's toast function (error style)
-      toast.error("Medication Deleted", { // Using error style
-        description: `${medName} has been removed.`,
-      });
-   }, [medications]); // Removed toast hook dependency
-
-
-  const handleEditMedication = useCallback((med) => {
-    setEditingMedication(med);
-    setIsDialogOpen(true);
-  }, []);
-
-  const handleAddNewMedication = useCallback(() => {
-    setEditingMedication(null);
-    setIsDialogOpen(true);
-  }, []);
-
-  const handleDialogChange = useCallback((open) => {
-    setIsDialogOpen(open);
-    if (!open) {
-      setEditingMedication(null);
-    }
-  }, []);
+  const handleEditMedication = useCallback((med) => { setEditingMedication(med); setIsDialogOpen(true); }, []);
+  const handleAddNewMedication = useCallback(() => { setEditingMedication(null); setIsDialogOpen(true); }, []);
+  const handleDialogChange = useCallback((open) => { setIsDialogOpen(open); if (!open) { setEditingMedication(null); } }, []);
   // --- End Event Handlers ---
 
 
@@ -361,7 +322,7 @@ const MedicationTracker = () => {
 
   return (
     <>
-      {/* Add SonnerToaster component here */}
+      {/* SonnerToaster component */}
       <SonnerToaster position="top-center" richColors /> 
       
       <div className="max-w-2xl mx-auto p-4 md:p-6 lg:p-8 bg-background min-h-screen font-sans">
@@ -374,7 +335,7 @@ const MedicationTracker = () => {
           <p className="text-muted-foreground">Your personal medication schedule</p>
         </header>
 
-        {/* Medication Grid Section */}
+        {/* Medication Grid Section (No changes here) */}
         <section className="mb-8">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
@@ -428,41 +389,74 @@ const MedicationTracker = () => {
           )}
         </section>
 
-        {/* Recent Doses Log Section */}
+        {/* --- Recent Doses Log Section (MODIFIED) --- */}
         <section>
           <h2 className="text-xl font-semibold text-foreground mb-4">Recent Doses</h2>
           {medLogs.length === 0 ? (
-            <p className="text-muted-foreground text-center italic py-4">No doses logged yet.</p>
+            <Card className="text-center py-6 border-dashed">
+                <CardContent className="flex flex-col items-center justify-center">
+                    <Clock size={32} className="text-muted-foreground mb-3"/>
+                    <p className="text-muted-foreground italic">No doses logged yet.</p>
+                </CardContent>
+            </Card>
           ) : (
-            <div className="space-y-3">
-              {lastThreeLogs.map((log) => (
-                <Card key={log.id} className="flex items-center justify-between p-3">
-                   <div className="flex items-center gap-3">
-                     {/* Pill icon styling remains the same */}
-                     <div className={`p-2 rounded-full ${log.medicationId.includes('codeine') ? 'bg-red-100 dark:bg-red-900' : log.medicationId.includes('ibuprofen') ? 'bg-blue-100 dark:bg-blue-900' : 'bg-green-100 dark:bg-green-900'}`}>
-                         <Pill size={16} className={`${log.medicationId.includes('codeine') ? 'text-red-600' : log.medicationId.includes('ibuprofen') ? 'text-blue-600' : 'text-green-600'}`} />
-                     </div>
-                     <div>
-                         <p className="font-medium text-foreground">{log.medicationName}</p>
-                         <p className="text-xs text-muted-foreground">
-                           Taken at: {formatTime(log.takenAt)}
+            // Use a standard Card component to wrap the list
+            <Card> 
+                <CardContent className="p-0"> {/* Remove padding from CardContent */}
+                    <div className="space-y-0"> {/* Remove vertical space between items */}
+                        {lastThreeLogs.map((log, index) => (
+                            <div 
+                                key={log.id} 
+                                // Add border between items, except for the last one
+                                className={cn(
+                                    "flex items-center gap-4 p-4 hover:bg-muted/50 transition-colors",
+                                    index < lastThreeLogs.length - 1 && "border-b" 
+                                )}
+                            >
+                                {/* Pill Icon */}
+                                <div className={cn(
+                                    "p-2 rounded-full",
+                                    log.medicationId.includes('codeine') ? 'bg-red-100 dark:bg-red-900/50' : 
+                                    log.medicationId.includes('ibuprofen') ? 'bg-blue-100 dark:bg-blue-900/50' : 
+                                    'bg-green-100 dark:bg-green-900/50'
+                                )}>
+                                    <Pill size={16} className={cn(
+                                        log.medicationId.includes('codeine') ? 'text-red-600 dark:text-red-400' : 
+                                        log.medicationId.includes('ibuprofen') ? 'text-blue-600 dark:text-blue-400' : 
+                                        'text-green-600 dark:text-green-400'
+                                    )} />
+                                </div>
+                                
+                                {/* Medication Name and Taken Time */}
+                                <div className="flex-grow"> {/* Allow this div to grow */}
+                                    <p className="font-semibold text-foreground">{log.medicationName}</p>
+                                    <p className="text-sm text-muted-foreground">
+                                    Taken: {formatTime(log.takenAt)}
+                                    </p>
+                                </div>
+
+                                {/* Next Dose Time (Pushed to the right) */}
+                                <div className="ml-auto text-right flex-shrink-0 pl-4"> {/* Use ml-auto, ensure it doesn't shrink, add padding */}
+                                    <p className="text-base font-medium text-foreground tabular-nums">{formatTime(log.nextDueAt)}</p>
+                                    <p className="text-xs text-muted-foreground">Next Dose</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </CardContent>
+                {/* Show more entries indicator if applicable */}
+                {medLogs.length > 3 && (
+                    <CardFooter className="pt-3 pb-3 justify-center">
+                         <p className="text-center text-sm text-muted-foreground">
+                             ... and {medLogs.length - 3} older entries
                          </p>
-                     </div>
-                   </div>
-                   <div className="text-right">
-                      <p className="text-sm font-medium text-foreground">{formatTime(log.nextDueAt)}</p>
-                      <p className="text-xs text-muted-foreground">Next Dose</p>
-                   </div>
-                </Card>
-              ))}
-              {medLogs.length > 3 && (
-                <p className="text-center text-sm text-muted-foreground pt-2">
-                  ... and {medLogs.length - 3} older entries
-                </p>
-              )}
-            </div>
+                    </CardFooter>
+                )}
+            </Card>
           )}
         </section>
+        {/* --- End Recent Doses Log Section --- */}
+
 
         {/* Add/Edit Dialog */}
         <AddEditMedicationDialog
