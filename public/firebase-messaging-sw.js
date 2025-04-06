@@ -23,7 +23,7 @@
         // --- Optional: Add Background Message Handler Later ---
         // You would uncomment and configure this later to handle notifications
         // when your app tab is not active.
-        /*
+
         // Initialize Firebase (ONLY if needed, often not necessary here)
         // const firebaseConfig = { apiKey: "...", authDomain: "...", ... };
         // firebase.initializeApp(firebaseConfig);
@@ -44,7 +44,7 @@
           // Use the Service Worker's registration to show the notification
           self.registration.showNotification(notificationTitle, notificationOptions);
         });
-        */
+    
   
       } catch (error) {
           console.error("Error loading Firebase scripts in Service Worker:", error);
