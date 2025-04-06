@@ -24,7 +24,6 @@ import {
   DialogTitle,
   DialogClose,
 } from "@/components/ui/dialog";
-// Import DropdownMenu components
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +32,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+// Import Tooltip components
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 // --- End Shadcn/ui Components ---
 
 // --- Sonner Toast Components ---
@@ -40,11 +46,11 @@ import { Toaster as SonnerToaster, toast } from "sonner";
 // --- End Sonner Toast Components ---
 
 // --- Constants ---
-const LOGS_PER_PAGE = 25; // Number of log items to show per "page"
+const LOGS_PER_PAGE = 25;
 // --- End Constants ---
 
 
-// --- Helper Functions ---
+// --- Helper Functions (formatTime, calculateTimeInfo remain the same) ---
 const formatTime = (dateString, includeDate = false) => {
   if (!dateString) return '--:--';
   const date = new Date(dateString);
@@ -55,7 +61,6 @@ const formatTime = (dateString, includeDate = false) => {
   return date.toLocaleTimeString([], timeOptions);
 };
 
-// calculateTimeInfo remains the same
 const calculateTimeInfo = (dueTimeString, intervalHours, currentTime) => {
     if (!dueTimeString) return { hours: 0, minutes: 0, isOverdue: false, progress: 0, takenAt: null };
     const dueTime = new Date(dueTimeString);
@@ -72,8 +77,9 @@ const calculateTimeInfo = (dueTimeString, intervalHours, currentTime) => {
 };
 // --- End Helper Functions ---
 
-// --- Child Components (MedicationCard, AddEditMedicationDialog remain the same) ---
+// --- Child Components ---
 
+// --- MedicationCard (MODIFIED) ---
 const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onEdit, isManageMode, onDelete }) => {
   const timeInfo = calculateTimeInfo(nextDueTimes[med.id], med.interval, currentTime);
   const getProgressColorClass = () => {
@@ -87,12 +93,15 @@ const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onE
 
   return (
     <Card className="relative overflow-hidden transition-all hover:shadow-md flex flex-col h-full">
+      {/* SVG Progress remains the same */}
       <svg className="absolute top-0 left-0 w-full h-full -rotate-90 opacity-20 pointer-events-none" viewBox="0 0 100 100">
         <circle cx="50" cy="50" r="45" fill="transparent" className="stroke-border" strokeWidth="6" />
         {nextDueTimes[med.id] && (
           <circle cx="50" cy="50" r="45" fill="transparent" className={cn(progressColorClass, "transition-all duration-500 ease-linear")} strokeWidth="6" strokeLinecap="round" strokeDasharray="283" strokeDashoffset={283 - (283 * timeInfo.progress / 100)}/>
         )}
       </svg>
+
+      {/* Card Header remains the same */}
       <CardHeader className="relative z-10 pb-2">
         <CardTitle className="flex items-center justify-between">
           <span className="truncate">{med.name}</span>
@@ -105,6 +114,8 @@ const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onE
         </CardTitle>
         <CardDescription>Every {med.interval} hours</CardDescription>
       </CardHeader>
+
+      {/* Card Content remains the same */}
       <CardContent className="relative z-10 flex-grow flex flex-col items-center justify-center text-center pb-4">
         {timeInfo.isOverdue ? (
           <span className="text-destructive font-bold text-lg animate-pulse">TAKE NOW</span>
@@ -117,15 +128,35 @@ const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onE
           <span className="text-muted-foreground italic">Ready to take first dose</span>
         )}
       </CardContent>
-      <CardFooter className="relative z-10 pt-0">
-        <Button onClick={() => onTake(med)} className="w-full" variant={timeInfo.isOverdue ? "destructive" : "default"} disabled={isManageMode}>
-          <Check size={16} className="mr-2" /> Take {med.name}
-        </Button>
+
+      {/* Card Footer (MODIFIED) */}
+      <CardFooter className="relative z-10 pt-0 justify-center"> {/* Center footer content */}
+        <TooltipProvider delayDuration={200}> {/* Add TooltipProvider */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* Updated Button: Icon only, not full width */}
+              <Button
+                onClick={() => onTake(med)}
+                variant={timeInfo.isOverdue ? "destructive" : "default"}
+                disabled={isManageMode}
+                size="lg" // Use a slightly larger size for better tap target
+                aria-label={`Take ${med.name}`} // Add aria-label for accessibility
+              >
+                <Pill size={18} /> {/* Use Pill icon, slightly larger */}
+                {/* Text removed */}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Take {med.name}</p> {/* Tooltip shows the full action */}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </CardFooter>
     </Card>
   );
 });
 
+// AddEditMedicationDialog remains the same
 const AddEditMedicationDialog = ({ open, onOpenChange, medication, onSave, medications }) => {
   const [name, setName] = useState('');
   const [interval, setIntervalValue] = useState(8);
@@ -176,7 +207,8 @@ const AddEditMedicationDialog = ({ open, onOpenChange, medication, onSave, medic
   );
 };
 
-// --- Main App Component ---
+
+// --- Main App Component (Handlers and other sections remain the same) ---
 const MedicationTracker = () => {
 
   // --- State Initialization ---
@@ -196,7 +228,6 @@ const MedicationTracker = () => {
   const [editingMedication, setEditingMedication] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
-  // New state for log pagination
   const [visibleLogCount, setVisibleLogCount] = useState(LOGS_PER_PAGE);
   // --- End State Initialization ---
 
@@ -205,16 +236,15 @@ const MedicationTracker = () => {
   useEffect(() => { localStorage.setItem('medications', JSON.stringify(medications)); }, [medications]);
   useEffect(() => { localStorage.setItem('medLogs', JSON.stringify(medLogs)); }, [medLogs]);
   useEffect(() => { localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes)); }, [nextDueTimes]);
-  // Reset visible count if logs change significantly (e.g., cleared)
   useEffect(() => { setVisibleLogCount(LOGS_PER_PAGE); }, [medLogs.length]);
   // --- End Effects ---
 
-  // --- Event Handlers ---
+  // --- Event Handlers (remain the same) ---
   const handleTakeMedication = useCallback((med) => {
     const now = new Date();
     const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
     const logEntry = { id: Date.now(), medicationId: med.id, medicationName: med.name, takenAt: now.toISOString(), nextDueAt: nextDue.toISOString() };
-    setMedLogs(prevLogs => [logEntry, ...prevLogs]); // Add to start of log array
+    setMedLogs(prevLogs => [logEntry, ...prevLogs]);
     setNextDueTimes(prevTimes => ({ ...prevTimes, [med.id]: nextDue.toISOString() }));
     toast.info("Medication Taken", { description: `${med.name} logged at ${formatTime(now.toISOString())}. Next dose at ${formatTime(nextDue.toISOString())}.` });
   }, []);
@@ -230,7 +260,6 @@ const MedicationTracker = () => {
       const medName = medToDelete ? medToDelete.name : 'Medication';
       setMedications(prevMeds => prevMeds.filter(med => med.id !== medIdToDelete));
       setNextDueTimes(prevTimes => { const updatedTimes = { ...prevTimes }; delete updatedTimes[medIdToDelete]; return updatedTimes; });
-      // Optional: Clear logs for this med? setMedLogs(prev => prev.filter(log => log.medicationId !== medIdToDelete));
       toast.error("Medication Deleted", { description: `${medName} has been removed.` });
    }, [medications]);
 
@@ -238,71 +267,40 @@ const MedicationTracker = () => {
   const handleAddNewMedication = useCallback(() => { setEditingMedication(null); setIsDialogOpen(true); }, []);
   const handleDialogChange = useCallback((open) => { setIsDialogOpen(open); if (!open) { setEditingMedication(null); } }, []);
 
-  // --- New Handlers for Log Features ---
-  const handleLoadMoreLogs = useCallback(() => {
-      setVisibleLogCount(prevCount => prevCount + LOGS_PER_PAGE);
-  }, []);
+  const handleLoadMoreLogs = useCallback(() => { setVisibleLogCount(prevCount => prevCount + LOGS_PER_PAGE); }, []);
 
   const handleCopyLog = useCallback(() => {
-      if (medLogs.length === 0) {
-          toast.warning("Log is empty", { description: "There are no medication logs to copy." });
-          return;
-      }
-      // Format log data for clipboard (more readable)
-      const formattedLog = medLogs
-          .map(log => `${log.medicationName} - Taken: ${formatTime(log.takenAt, true)} - Next Due: ${formatTime(log.nextDueAt, true)}`)
-          .join('\n'); // Newline separated
-
+      if (medLogs.length === 0) { toast.warning("Log is empty", { description: "There are no medication logs to copy." }); return; }
+      const formattedLog = medLogs.map(log => `${log.medicationName} - Taken: ${formatTime(log.takenAt, true)} - Next Due: ${formatTime(log.nextDueAt, true)}`).join('\n');
       navigator.clipboard.writeText(formattedLog)
-          .then(() => {
-              toast.success("Log copied to clipboard!");
-          })
-          .catch(err => {
-              console.error('Failed to copy log: ', err);
-              toast.error("Failed to copy log", { description: "Could not access clipboard." });
-          });
+          .then(() => { toast.success("Log copied to clipboard!"); })
+          .catch(err => { console.error('Failed to copy log: ', err); toast.error("Failed to copy log", { description: "Could not access clipboard." }); });
   }, [medLogs]);
 
   const handleExportCSV = useCallback(() => {
-      if (medLogs.length === 0) {
-          toast.warning("Log is empty", { description: "There are no medication logs to export." });
-          return;
-      }
-
-      // CSV Header
+      if (medLogs.length === 0) { toast.warning("Log is empty", { description: "There are no medication logs to export." }); return; }
       const header = ['Medication Name', 'Taken At (ISO)', 'Next Due At (ISO)'];
-      // CSV Rows (using ISO strings for unambiguous data)
-      const rows = medLogs.map(log => [
-          `"${log.medicationName.replace(/"/g, '""')}"`, // Quote and escape quotes in name
-          log.takenAt,
-          log.nextDueAt
-      ]);
-
-      // Combine header and rows
+      const rows = medLogs.map(log => [`"${log.medicationName.replace(/"/g, '""')}"`, log.takenAt, log.nextDueAt]);
       const csvContent = [header.join(','), ...rows.map(row => row.join(','))].join('\n');
-
-      // Create Blob and Download Link
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement("a");
-      if (link.download !== undefined) { // Check for browser support
+      if (link.download !== undefined) {
           const url = URL.createObjectURL(blob);
           link.setAttribute("href", url);
-          link.setAttribute("download", `medication_log_${new Date().toISOString().split('T')[0]}.csv`); // Filename with date
+          link.setAttribute("download", `medication_log_${new Date().toISOString().split('T')[0]}.csv`);
           link.style.visibility = 'hidden';
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
-          URL.revokeObjectURL(url); // Clean up
+          URL.revokeObjectURL(url);
           toast.success("Log exported as CSV!");
-      } else {
-          toast.error("Export failed", { description: "CSV export is not supported in your browser." });
-      }
+      } else { toast.error("Export failed", { description: "CSV export is not supported in your browser." }); }
   }, [medLogs]);
   // --- End Event Handlers ---
 
 
   // --- Render Logic ---
-  const visibleLogs = medLogs.slice(0, visibleLogCount); // Use slice for pagination
+  const visibleLogs = medLogs.slice(0, visibleLogCount);
   const canLoadMore = visibleLogCount < medLogs.length;
 
   return (
@@ -318,8 +316,9 @@ const MedicationTracker = () => {
           <p className="text-muted-foreground">Your personal medication schedule</p>
         </header>
 
-        {/* Medication Grid Section (No changes here) */}
+        {/* Medication Grid Section */}
         <section className="mb-8">
+          {/* Header and buttons remain the same */}
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
             <div className="flex gap-2">
@@ -334,6 +333,7 @@ const MedicationTracker = () => {
               )}
             </div>
           </div>
+          {/* Grid remains the same */}
           {medications.length === 0 ? (
              <Card className="text-center py-8"><CardHeader><CardTitle className="text-muted-foreground">No Medications Added</CardTitle></CardHeader><CardContent><Button onClick={handleAddNewMedication}><PlusCircle size={16} className="mr-2" /> Add Your First Medication</Button></CardContent></Card>
           ) : (
@@ -344,88 +344,49 @@ const MedicationTracker = () => {
           )}
         </section>
 
-        {/* --- Recent Doses Log Section (MODIFIED) --- */}
+        {/* Medication History Section (Log List) */}
         <section>
-          {/* Title and Action Buttons */}
+          {/* Header and dropdown remain the same */}
           <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold text-foreground">Medication History</h2>
-              {/* Dropdown Menu for Copy/Export */}
               <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                      <Button variant="outline" size="sm" disabled={medLogs.length === 0}>
-                          <MoreHorizontal className="h-4 w-4 mr-2" /> Actions
-                      </Button>
-                  </DropdownMenuTrigger>
+                  <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={medLogs.length === 0}><MoreHorizontal className="h-4 w-4 mr-2" /> Actions</Button></DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                       <DropdownMenuLabel>Log Actions</DropdownMenuLabel>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={handleCopyLog}>
-                          <ClipboardCopy className="mr-2 h-4 w-4" />
-                          <span>Copy Full Log</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleExportCSV}>
-                          <Download className="mr-2 h-4 w-4" />
-                          <span>Export as CSV</span>
-                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCopyLog}><ClipboardCopy className="mr-2 h-4 w-4" /><span>Copy Full Log</span></DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleExportCSV}><Download className="mr-2 h-4 w-4" /><span>Export as CSV</span></DropdownMenuItem>
                   </DropdownMenuContent>
               </DropdownMenu>
           </div>
-
-          {/* Log List */}
+          {/* Log list rendering remains the same */}
           {medLogs.length === 0 ? (
-            <Card className="text-center py-6 border-dashed">
-                <CardContent className="flex flex-col items-center justify-center">
-                    <Clock size={32} className="text-muted-foreground mb-3"/>
-                    <p className="text-muted-foreground italic">No doses logged yet.</p>
-                </CardContent>
-            </Card>
+            <Card className="text-center py-6 border-dashed"><CardContent className="flex flex-col items-center justify-center"><Clock size={32} className="text-muted-foreground mb-3"/><p className="text-muted-foreground italic">No doses logged yet.</p></CardContent></Card>
           ) : (
             <Card> 
                 <CardContent className="p-0">
-                    <div className="space-y-0 max-h-[400px] overflow-y-auto"> {/* Added max-height and scroll */}
-                        {/* Map over visibleLogs */}
+                    <div className="space-y-0 max-h-[400px] overflow-y-auto">
                         {visibleLogs.map((log, index) => (
-                            <div 
-                                key={log.id} 
-                                className={cn( "flex items-center gap-4 p-4 hover:bg-muted/50 transition-colors", index < visibleLogs.length - 1 && "border-b" )}
-                            >
-                                {/* Pill Icon */}
+                            <div key={log.id} className={cn( "flex items-center gap-4 p-4 hover:bg-muted/50 transition-colors", index < visibleLogs.length - 1 && "border-b" )}>
                                 <div className={cn("p-2 rounded-full", log.medicationId.includes('codeine') ? 'bg-red-100 dark:bg-red-900/50' : log.medicationId.includes('ibuprofen') ? 'bg-blue-100 dark:bg-blue-900/50' : 'bg-green-100 dark:bg-green-900/50')}>
                                     <Pill size={16} className={cn(log.medicationId.includes('codeine') ? 'text-red-600 dark:text-red-400' : log.medicationId.includes('ibuprofen') ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400')} />
                                 </div>
-                                {/* Medication Name and Taken Time */}
-                                <div className="flex-grow">
-                                    <p className="font-semibold text-foreground">{log.medicationName}</p>
-                                    <p className="text-sm text-muted-foreground">Taken: {formatTime(log.takenAt)}</p>
-                                </div>
-                                {/* Next Dose Time */}
-                                <div className="ml-auto text-right flex-shrink-0 pl-4">
-                                    <p className="text-base font-medium text-foreground tabular-nums">{formatTime(log.nextDueAt)}</p>
-                                    <p className="text-xs text-muted-foreground">Next Dose</p>
-                                </div>
+                                <div className="flex-grow"><p className="font-semibold text-foreground">{log.medicationName}</p><p className="text-sm text-muted-foreground">Taken: {formatTime(log.takenAt)}</p></div>
+                                <div className="ml-auto text-right flex-shrink-0 pl-4"><p className="text-base font-medium text-foreground tabular-nums">{formatTime(log.nextDueAt)}</p><p className="text-xs text-muted-foreground">Next Dose</p></div>
                             </div>
                         ))}
                     </div>
                 </CardContent>
-                {/* Load More Button or All Loaded message */}
-                {medLogs.length > LOGS_PER_PAGE && ( // Only show footer if there are potentially more logs than initial view
+                {medLogs.length > LOGS_PER_PAGE && (
                     <CardFooter className="pt-4 pb-3 justify-center">
-                        {canLoadMore ? (
-                            <Button variant="outline" onClick={handleLoadMoreLogs}>
-                                <Plus className="mr-2 h-4 w-4" /> Load More ({medLogs.length - visibleLogCount} remaining)
-                            </Button>
-                        ) : (
-                            <p className="text-sm text-muted-foreground italic">All {medLogs.length} entries shown.</p>
-                        )}
+                        {canLoadMore ? (<Button variant="outline" onClick={handleLoadMoreLogs}><Plus className="mr-2 h-4 w-4" /> Load More ({medLogs.length - visibleLogCount} remaining)</Button>) : (<p className="text-sm text-muted-foreground italic">All {medLogs.length} entries shown.</p>)}
                     </CardFooter>
                 )}
             </Card>
           )}
         </section>
-        {/* --- End Recent Doses Log Section --- */}
-
-
-        {/* Add/Edit Dialog */}
+        
+        {/* Add/Edit Dialog remains the same */}
         <AddEditMedicationDialog
           open={isDialogOpen}
           onOpenChange={handleDialogChange}
