@@ -1,22 +1,24 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     Pill, Check, Edit, PlusCircle, MoreHorizontal, ClipboardCopy, Download,
-    LayoutGrid, CalendarDays
+    LayoutGrid, CalendarDays, Bell, BellOff // Icons
 } from "lucide-react";
 import { toast } from "sonner";
 
-// Import Firebase Auth & Firestore functions and the configured instances
-import { auth, db } from './firebaseConfig';
+// Import Firebase Auth, Firestore, & Messaging functions and instances
+import { auth, db } from './firebaseConfig'; // Assuming you created this file in Step 2
 import { onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider } from "firebase/auth";
 import {
     collection, doc, onSnapshot, addDoc, setDoc, deleteDoc, query, orderBy, Timestamp
 } from "firebase/firestore";
+import { getMessaging, getToken, isSupported } from "firebase/messaging"; // Messaging imports
 
 // Import UI Components
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Toaster as SonnerToaster } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 // Import Custom Components
 import MedicationGrid from './components/MedicationGrid';
@@ -33,188 +35,215 @@ const LOGS_PER_PAGE = 25;
 
 /**
  * Main application component for MedTracker.
- * Manages state via Firestore and renders child components.
+ * Manages state via Firestore, Auth, and renders child components.
  */
 const App = () => {
-  // --- State Initialization ---
-  // Authentication State
+  // --- State ---
   const [user, setUser] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
-
-  // Application Data State (Loaded from Firestore)
-  // Initialize with empty defaults - REMOVED localStorage.getItem logic
   const [medications, setMedications] = useState([]);
   const [medLogs, setMedLogs] = useState([]);
   const [loadingData, setLoadingData] = useState(true);
-
-  // Derived State
   const [nextDueTimes, setNextDueTimes] = useState({});
-
-  // UI State
   const [isManageMode, setIsManageMode] = useState(false);
   const [editingMedication, setEditingMedication] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [visibleLogCount, setVisibleLogCount] = useState(LOGS_PER_PAGE);
-  // --- End State Initialization ---
+  // FCM/Notification State
+  const [notificationPermission, setNotificationPermission] = useState('default');
+  const [isFcmSupported, setIsFcmSupported] = useState(false);
+  // --- End State ---
 
   // --- Effects ---
-  // Listener for Firebase Authentication state changes
+  // Check FCM support and initial permission status
+  useEffect(() => {
+    console.log("Checking FCM support...");
+    isSupported().then((supported) => {
+      setIsFcmSupported(supported);
+      if (supported) {
+        console.log("FCM is supported. Initial permission:", Notification.permission);
+        setNotificationPermission(Notification.permission);
+      } else {
+        console.log("FCM is not supported in this browser.");
+      }
+    }).catch(err => {
+        console.error("Error checking FCM support:", err);
+        setIsFcmSupported(false); // Assume not supported on error
+    });
+  }, []);
+
+  // Auth listener
   useEffect(() => {
     setLoadingAuth(true);
+    console.log("Setting up Auth listener...");
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      console.log("Auth state changed:", currentUser ? currentUser.uid : "null");
       setUser(currentUser);
       setLoadingAuth(false);
-      console.log("Auth State Changed:", currentUser ? `User ID: ${currentUser.uid}` : "No user");
       if (!currentUser) {
-         // Clear data on sign out
-         setMedications([]);
-         setMedLogs([]);
-         setNextDueTimes({});
-         setLoadingData(true); // Reset loading state
-         setIsManageMode(false);
-         setVisibleLogCount(LOGS_PER_PAGE);
+         setMedications([]); setMedLogs([]); setNextDueTimes({}); setLoadingData(true);
+         setIsManageMode(false); setVisibleLogCount(LOGS_PER_PAGE);
+      } else {
+          if (isFcmSupported) { setNotificationPermission(Notification.permission); }
       }
-      // Firestore listeners are handled in the next effect based on 'user'
     });
-    return () => unsubscribeAuth();
-  }, []);
+    return () => { console.log("Cleaning up Auth listener."); unsubscribeAuth(); };
+  }, [isFcmSupported]);
 
-  // Listener for Firestore Data Changes
+  // Firestore listeners
   useEffect(() => {
-    if (!user) {
-        setLoadingData(false); // No data to load if no user
-        // Ensure state is clear if somehow populated before logout finished
-        if (medications.length > 0) setMedications([]);
-        if (medLogs.length > 0) setMedLogs([]);
-        if (Object.keys(nextDueTimes).length > 0) setNextDueTimes({});
-        return; // Stop if no user
-    }
-
+    if (!user) { setLoadingData(false); return; }
+    console.log(`Setting up Firestore listeners for user: ${user.uid}`);
     setLoadingData(true);
+    let unsubMeds = () => {};
+    let unsubLogs = () => {};
+    try {
+        const medsCollectionRef = collection(db, 'users', user.uid, 'medications');
+        unsubMeds = onSnapshot(medsCollectionRef, (snap) => {
+          setMedications(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+          setLoadingData(false); console.log("Firestore: Medications updated.");
+        }, (err) => { console.error("Firestore meds listener error:", err); toast.error("Failed to load meds"); setLoadingData(false); });
+        const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
+        const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc"));
+        unsubLogs = onSnapshot(logsQuery, (snap) => {
+          setMedLogs(snap.docs.map(doc => { const d = doc.data(); return { id: doc.id, ...d, takenAt: d.takenAt?.toDate().toISOString(), nextDueAt: d.nextDueAt?.toDate().toISOString() }; }));
+          setLoadingData(false); console.log("Firestore: Logs updated.");
+        }, (err) => { console.error("Firestore logs listener error:", err); toast.error("Failed to load history"); setLoadingData(false); });
+    } catch (error) { console.error("Error setting up Firestore listeners:", error); setLoadingData(false); toast.error("Error connecting to database."); }
+    return () => { console.log(`Cleaning up Firestore listeners for user: ${user.uid}`); unsubMeds(); unsubLogs(); };
+  }, [user]);
 
-    // Listener for Medications
-    const medsCollectionRef = collection(db, 'users', user.uid, 'medications');
-    const unsubscribeMeds = onSnapshot(medsCollectionRef, (querySnapshot) => {
-      const userMedications = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMedications(userMedications);
-      setLoadingData(false); // Consider loading complete after first fetch
-      console.log("Medications loaded/updated from Firestore");
-    }, (error) => {
-        console.error("Error fetching medications:", error);
-        toast.error("Failed to load medications", { description: error.message });
-        setLoadingData(false);
-    });
-
-    // Listener for Medication Logs
-    const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
-    const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc"));
-    const unsubscribeLogs = onSnapshot(logsQuery, (querySnapshot) => {
-      const userLogs = querySnapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-            id: doc.id, ...data,
-            takenAt: data.takenAt?.toDate().toISOString(),
-            nextDueAt: data.nextDueAt?.toDate().toISOString()
-        };
-      });
-      setMedLogs(userLogs);
-      setLoadingData(false); // Consider loading complete
-      console.log("Logs loaded/updated from Firestore");
-    }, (error) => {
-        console.error("Error fetching logs:", error);
-        toast.error("Failed to load medication history", { description: error.message });
-        setLoadingData(false);
-    });
-
-    // Cleanup listeners
-    return () => {
-      unsubscribeMeds();
-      unsubscribeLogs();
-    };
-  }, [user]); // Re-run when user changes
-
-  // Effect to derive nextDueTimes from medLogs
+  // Derive nextDueTimes
   useEffect(() => {
     if (medLogs.length === 0) { setNextDueTimes({}); return; }
-    const latestDueTimes = {};
-    medLogs.forEach(log => {
-      if (!latestDueTimes[log.medicationId] && log.nextDueAt) {
-        latestDueTimes[log.medicationId] = log.nextDueAt;
-      }
-    });
-    setNextDueTimes(latestDueTimes);
-    console.log("Derived nextDueTimes");
+    const latest = {}; medLogs.forEach(log => { if (!latest[log.medicationId] && log.nextDueAt) latest[log.medicationId] = log.nextDueAt; });
+    setNextDueTimes(latest);
   }, [medLogs]);
 
-  // Update current time periodically
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 10000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Reset pagination when logs change
+  // Update current time
+  useEffect(() => { const timer = setInterval(() => setCurrentTime(new Date()), 10000); return () => clearInterval(timer); }, []);
+  // Reset pagination
   useEffect(() => { setVisibleLogCount(LOGS_PER_PAGE); }, [medLogs.length]);
-
-  // *** REMOVED useEffect hooks for localStorage.setItem ***
-
   // --- End Effects ---
 
-  // --- Authentication Handlers (no change needed) ---
-  const handleSignIn = useCallback(async () => {
-      const provider = new GoogleAuthProvider();
-      try { setLoadingAuth(true); await signInWithPopup(auth, provider); toast.success("Signed in successfully!"); }
-      catch (error) { console.error("Sign-in error:", error); toast.error("Sign-in failed", { description: error.message }); setLoadingAuth(false); }
-  }, []);
-  const handleSignOut = useCallback(async () => {
-      try { await signOut(auth); toast.info("Signed out."); }
-      catch (error) { console.error("Sign-out error:", error); toast.error("Sign-out failed", { description: error.message }); }
-  }, []);
-  // --- End Authentication Handlers ---
+  // --- Notification Handler ---
+  const handleRequestNotificationPermission = useCallback(async () => {
+    console.log("handleRequestNotificationPermission called.");
+    if (!isFcmSupported) { toast.error("Notifications not supported"); return; }
+    if (!user) { toast.error("Please sign in first."); return; }
+    console.log("Requesting notification permission...");
+    try {
+      const permission = await Notification.requestPermission();
+      console.log("Notification permission result:", permission);
+      setNotificationPermission(permission);
+      if (permission === 'granted') {
+        toast.info("Permission granted. Getting FCM token...");
+        const messaging = getMessaging();
+        const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+        if (!vapidKey) { console.error("VAPID key missing!"); toast.error("Configuration error"); return; }
+        console.log("Attempting to get FCM token...");
+        const currentToken = await getToken(messaging, { vapidKey: vapidKey });
+        if (currentToken) {
+          console.log('FCM Token received:', currentToken);
+          const tokenDocRef = doc(db, 'users', user.uid, 'fcmTokens', currentToken);
+          console.log("Saving token to Firestore...");
+          await setDoc(tokenDocRef, { createdAt: Timestamp.now(), userAgent: navigator.userAgent });
+          console.log("Token saved.");
+          toast.success("Notifications enabled!");
+        } else { console.warn('No FCM registration token available.'); toast.warning("Could not get token."); }
+      } else if (permission === 'denied') { toast.error("Notifications blocked"); }
+      else { toast.info("Permission dismissed."); }
+    } catch (error) { console.error('Error during notification setup:', error); toast.error("Failed to enable notifications"); }
+  }, [user, isFcmSupported]);
+  // --- End Notification Handler ---
 
-  // --- Core Logic Handlers (Write to Firestore - no change needed from previous step) ---
+
+  // --- Auth Handlers ---
+  const handleSignIn = useCallback(async () => {
+    console.log("Sign-in button clicked!"); // Debug Log
+    const provider = new GoogleAuthProvider();
+    try {
+      setLoadingAuth(true);
+      console.log("Attempting signInWithPopup..."); // Debug Log
+      await signInWithPopup(auth, provider);
+      console.log("signInWithPopup successful (or popup closed)"); // Debug Log
+      toast.success("Signed in successfully!");
+    } catch (error) {
+      console.error("Sign-in error:", error); // Keep detailed error log
+      if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') { toast.info("Sign-in cancelled."); }
+      else { toast.error("Sign-in failed", { description: error.message }); }
+      setLoadingAuth(false);
+    }
+  }, [setLoadingAuth]); // Dependency added
+
+  const handleSignOut = useCallback(async () => {
+    console.log("App: handleSignOut triggered"); // Debug Log
+    try { await signOut(auth); toast.info("Signed out."); }
+    catch (error) { console.error("Sign-out error:", error); toast.error("Sign-out failed"); }
+  }, []);
+  // --- End Auth Handlers ---
+
+  // --- Core Logic Handlers (with Debugging Logs) ---
   const handleTakeMedication = useCallback(async (med) => {
-      if (!user) { toast.error("Please sign in."); return; }
-      const now = new Date(); const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-      const logEntry = { medicationId: med.id, medicationName: med.name, takenAt: Timestamp.fromDate(now), nextDueAt: Timestamp.fromDate(nextDue) };
-      try { const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs'); await addDoc(logsCollectionRef, logEntry); toast.info("Medication Taken", { description: `${med.name} logged.` }); }
-      catch (error) { console.error("Error logging med:", error); toast.error("Failed to log med", { description: error.message }); }
+    console.log("App: handleTakeMedication triggered for", med?.name); // Debug Log
+    if (!user) { console.log("TakeMed: No user, aborting."); toast.error("Please sign in."); return; }
+    const now = new Date(); const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
+    const logEntry = { medicationId: med.id, medicationName: med.name, takenAt: Timestamp.fromDate(now), nextDueAt: Timestamp.fromDate(nextDue) };
+    try { const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs'); await addDoc(logsCollectionRef, logEntry); toast.info("Medication Taken", { description: `${med.name} logged.` }); }
+    catch (error) { console.error("Error logging med:", error); toast.error("Failed to log med", { description: error.message }); }
   }, [user]);
 
   const handleSaveMedication = useCallback(async (medData, isEditing) => {
-      if (!user) { toast.error("Please sign in."); return; }
-      const medDocRef = doc(db, 'users', user.uid, 'medications', medData.id);
-      const dataToSave = { name: medData.name, interval: medData.interval };
-      try { await setDoc(medDocRef, dataToSave); /* Toast handled in dialog */ }
-      catch (error) { console.error("Error saving med:", error); toast.error(`Failed to ${isEditing ? 'update' : 'add'} med`, { description: error.message }); }
+    console.log(`App: handleSaveMedication triggered (${isEditing ? 'Edit' : 'Add'}) for`, medData?.name); // Debug Log
+    if (!user) { console.log("SaveMed: No user, aborting."); toast.error("Please sign in."); return; }
+    const medDocRef = doc(db, 'users', user.uid, 'medications', medData.id);
+    const dataToSave = { name: medData.name, interval: medData.interval };
+    try { await setDoc(medDocRef, dataToSave); /* Toast handled in dialog */ }
+    catch (error) { console.error("Error saving med:", error); toast.error(`Failed to ${isEditing ? 'update' : 'add'} med`, { description: error.message }); }
   }, [user]);
 
   const handleDeleteMedication = useCallback(async (medIdToDelete) => {
-      if (!user) { toast.error("Please sign in."); return; }
-      const medToDelete = medications.find(med => med.id === medIdToDelete); const medName = medToDelete ? medToDelete.name : 'Medication';
-      const medDocRef = doc(db, 'users', user.uid, 'medications', medIdToDelete);
-      try { await deleteDoc(medDocRef); toast.error("Medication Deleted", { description: `${medName} removed.` }); }
-      catch (error) { console.error("Error deleting med:", error); toast.error("Failed to delete med", { description: error.message }); }
+    console.log("App: handleDeleteMedication triggered for ID:", medIdToDelete); // Debug Log
+    if (!user) { console.log("DeleteMed: No user, aborting."); toast.error("Please sign in."); return; }
+    const medToDelete = medications.find(med => med.id === medIdToDelete); const medName = medToDelete ? medToDelete.name : 'Medication';
+    const medDocRef = doc(db, 'users', user.uid, 'medications', medIdToDelete);
+    try { await deleteDoc(medDocRef); toast.error("Medication Deleted", { description: `${medName} removed.` }); }
+    catch (error) { console.error("Error deleting med:", error); toast.error("Failed to delete med", { description: error.message }); }
   }, [user, medications]);
 
-  // --- UI Control Handlers (no change needed) ---
-  const handleEditMedication = useCallback((med) => { setEditingMedication(med); setIsDialogOpen(true); }, []);
-  const handleAddNewMedication = useCallback(() => { setEditingMedication(null); setIsDialogOpen(true); }, []);
+  // --- UI Control Handlers (with Debugging Logs) ---
+  const handleEditMedication = useCallback((med) => {
+    console.log("App: handleEditMedication triggered for", med?.name); // Debug Log
+    setEditingMedication(med);
+    setIsDialogOpen(true);
+  }, []);
+
+  const handleAddNewMedication = useCallback(() => {
+    console.log("App: handleAddNewMedication triggered"); // Debug Log
+    setEditingMedication(null);
+    setIsDialogOpen(true);
+  }, []);
+
   const handleDialogChange = useCallback((open) => { setIsDialogOpen(open); if (!open) { setEditingMedication(null); } }, []);
   const handleLoadMoreLogs = useCallback(() => { setVisibleLogCount(prevCount => prevCount + LOGS_PER_PAGE); }, []);
-
-  // --- Log Action Handlers (no change needed) ---
+  // --- Log Action Handlers ---
   const handleCopyLog = useCallback(() => { /* ... */ }, [medLogs]);
   const handleExportCSV = useCallback(() => { /* ... */ }, [medLogs]);
   // --- End Handlers ---
 
   // --- Render Logic ---
-  if (loadingAuth || (user && loadingData && medLogs.length === 0 && medications.length === 0)) { // Refined loading condition
-    return (
-      <div className="flex justify-center items-center min-h-screen text-muted-foreground">
-        {loadingAuth ? "Authenticating..." : "Loading Medication Data..."}
-      </div>
-    );
+  if (loadingAuth || (user && loadingData && medLogs.length === 0 && medications.length === 0)) {
+    return ( <div className="flex justify-center items-center min-h-screen text-muted-foreground"> {loadingAuth ? "Authenticating..." : "Loading Medication Data..."} </div> );
+  }
+
+  // Notification Button UI Logic
+  let notificationButton = null;
+  if (isFcmSupported && user) {
+      let buttonText = "Enable Notifications"; let buttonIcon = <Bell className="mr-2 h-4 w-4" />; let buttonDisabled = false; let tooltipText = "Click to allow medication reminders";
+      if (notificationPermission === 'granted') { buttonText = "Notifications On"; buttonIcon = <Bell className="mr-2 h-4 w-4 text-green-500" />; buttonDisabled = true; tooltipText = "Notifications are active"; }
+      else if (notificationPermission === 'denied') { buttonText = "Notifications Off"; buttonIcon = <BellOff className="mr-2 h-4 w-4" />; buttonDisabled = true; tooltipText = "Notifications blocked by browser"; }
+      notificationButton = ( <TooltipProvider delayDuration={100}><Tooltip> <TooltipTrigger asChild><span tabIndex={buttonDisabled ? 0 : -1}> <Button variant="outline" size="sm" onClick={handleRequestNotificationPermission} disabled={buttonDisabled} aria-label={tooltipText}> {buttonIcon} {buttonText} </Button> </span></TooltipTrigger> <TooltipContent><p>{tooltipText}</p></TooltipContent> </Tooltip></TooltipProvider> );
   }
 
   return (
@@ -223,14 +252,12 @@ const App = () => {
       <div className="max-w-4xl mx-auto p-4 md:p-6 lg:p-8 bg-background min-h-screen font-sans">
         {/* Header */}
         <header className="mb-6 pb-4 border-b flex justify-between items-center gap-4">
-          <div className="flex-1"></div>
-          <div className="text-center">
+           <div className="flex-1 flex justify-start">{notificationButton}</div>
+           <div className="text-center">
              <h1 className="text-3xl font-bold tracking-tight text-foreground mb-2 flex items-center justify-center gap-2"><Pill className="text-primary" /> MedTracker</h1>
              <p className="text-muted-foreground text-sm">{user ? `Tracking for ${user.displayName || 'User'}` : 'Your personal medication schedule'}</p>
-          </div>
-          <div className="flex-1 flex justify-end">
-             {user && (<Button variant="outline" size="sm" onClick={handleSignOut}>Sign Out</Button>)}
-          </div>
+           </div>
+           <div className="flex-1 flex justify-end">{user && (<Button variant="outline" size="sm" onClick={handleSignOut}>Sign Out</Button>)}</div>
         </header>
 
         {/* Conditional Content: Sign-In or Main App */}
@@ -247,63 +274,53 @@ const App = () => {
               <TabsTrigger value="dashboard"><LayoutGrid className="mr-2 h-4 w-4"/> Dashboard</TabsTrigger>
               <TabsTrigger value="calendar"><CalendarDays className="mr-2 h-4 w-4"/> Calendar View</TabsTrigger>
             </TabsList>
-
             {/* Dashboard Content */}
             <TabsContent value="dashboard">
-              <section className="mb-8">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
-                  <div className="flex gap-2">
-                    <Button variant={isManageMode ? "default" : "outline"} onClick={() => setIsManageMode(!isManageMode)}>
-                      {isManageMode ? <Check size={16} className="mr-2"/> : <Edit size={16} className="mr-2" />}
-                      {isManageMode ? 'Done Managing' : 'Manage'}
-                    </Button>
-                    {isManageMode && (<Button variant="outline" onClick={handleAddNewMedication}><PlusCircle size={16} className="mr-2" /> Add New</Button>)}
-                  </div>
-                </div>
-                <MedicationGrid
-                  medications={medications} nextDueTimes={nextDueTimes} currentTime={currentTime}
-                  handleTakeMedication={handleTakeMedication} handleEditMedication={handleEditMedication}
-                  isManageMode={isManageMode} handleDeleteMedication={handleDeleteMedication}
-                  handleAddNewMedication={handleAddNewMedication}
-                />
-              </section>
-              <section>
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-semibold text-foreground">Medication History</h2>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={medLogs.length === 0}><MoreHorizontal className="h-4 w-4 mr-2" /> Actions</Button></DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Log Actions</DropdownMenuLabel><DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={handleCopyLog}><ClipboardCopy className="mr-2 h-4 w-4" /><span>Copy Full Log</span></DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleExportCSV}><Download className="mr-2 h-4 w-4" /><span>Export as CSV</span></DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-                <LogList
-                  medLogs={medLogs} visibleLogCount={visibleLogCount}
-                  handleLoadMoreLogs={handleLoadMoreLogs} logsPerPage={LOGS_PER_PAGE}
-                />
-              </section>
+               <section className="mb-8">
+                 <div className="flex justify-between items-center mb-4">
+                   <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
+                   <div className="flex gap-2">
+                     {/* Manage Button */}
+                     <Button variant={isManageMode ? "default" : "outline"} onClick={() => { console.log("Toggle Manage Mode clicked"); setIsManageMode(!isManageMode); }}>
+                       {isManageMode ? <Check size={16} className="mr-2"/> : <Edit size={16} className="mr-2" />}
+                       {isManageMode ? 'Done Managing' : 'Manage'}
+                     </Button>
+                     {/* Add New Button (in header) */}
+                     {isManageMode && ( <Button variant="outline" onClick={() => { console.log("Header Add New button clicked"); handleAddNewMedication(); }}> <PlusCircle size={16} className="mr-2" /> Add New </Button> )}
+                   </div>
+                 </div>
+                 <MedicationGrid
+                   medications={medications} nextDueTimes={nextDueTimes} currentTime={currentTime}
+                   handleTakeMedication={handleTakeMedication} handleEditMedication={handleEditMedication}
+                   isManageMode={isManageMode} handleDeleteMedication={handleDeleteMedication}
+                   handleAddNewMedication={handleAddNewMedication}
+                 />
+               </section>
+               <section>
+                 <div className="flex justify-between items-center mb-4">
+                   <h2 className="text-xl font-semibold text-foreground">Medication History</h2>
+                   <DropdownMenu>
+                     <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={medLogs.length === 0}><MoreHorizontal className="h-4 w-4 mr-2" /> Actions</Button></DropdownMenuTrigger>
+                     <DropdownMenuContent align="end">
+                       <DropdownMenuLabel>Log Actions</DropdownMenuLabel><DropdownMenuSeparator />
+                       <DropdownMenuItem onClick={handleCopyLog}><ClipboardCopy className="mr-2 h-4 w-4" /><span>Copy Full Log</span></DropdownMenuItem>
+                       <DropdownMenuItem onClick={handleExportCSV}><Download className="mr-2 h-4 w-4" /><span>Export as CSV</span></DropdownMenuItem>
+                     </DropdownMenuContent>
+                   </DropdownMenu>
+                 </div>
+                 <LogList
+                   medLogs={medLogs} visibleLogCount={visibleLogCount}
+                   handleLoadMoreLogs={handleLoadMoreLogs} logsPerPage={LOGS_PER_PAGE}
+                 />
+               </section>
             </TabsContent>
-
             {/* Calendar Content */}
-            <TabsContent value="calendar">
-               <MedicationCalendarView medLogs={medLogs} />
-            </TabsContent>
+            <TabsContent value="calendar"> <MedicationCalendarView medLogs={medLogs} /> </TabsContent>
           </Tabs>
         )}
 
-        {/* Add/Edit Dialog (Conditionally rendered) */}
-        {user && (
-             <AddEditMedicationDialog
-               open={isDialogOpen}
-               onOpenChange={handleDialogChange}
-               medication={editingMedication}
-               onSave={handleSaveMedication}
-               medications={medications}
-             />
-        )}
+        {/* Add/Edit Dialog */}
+        {user && ( <AddEditMedicationDialog open={isDialogOpen} onOpenChange={handleDialogChange} medication={editingMedication} onSave={handleSaveMedication} medications={medications} /> )}
       </div>
     </>
   );
