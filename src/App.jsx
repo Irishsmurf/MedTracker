@@ -250,7 +250,8 @@ const App = () => {
   const handleDialogChange = useCallback((open) => { setIsDialogOpen(open); if (!open) { setEditingMedication(null); } }, []);
   const handleLoadMoreLogs = useCallback(() => { setVisibleLogCount(prevCount => prevCount + LOGS_PER_PAGE); }, []);
   // --- Log Action Handlers ---
-  // --- Log Action Handlers (MODIFIED with Debugging Logs) ---
+  // --- Log Action Handlers (with Debugging Logs) ---
+
   const handleCopyLog = useCallback(() => {
     console.log("handleCopyLog triggered."); // Log: Start
     console.log("Current medLogs:", medLogs); // Log: Data Input
@@ -262,7 +263,7 @@ const App = () => {
     }
 
     try {
-        // Format log data for clipboard
+        // Format log data for clipboard (more readable with date)
         const formattedLog = medLogs
             .map((log, index) => {
                 // Log individual log item data being processed
@@ -270,7 +271,9 @@ const App = () => {
                 // Ensure dates are valid before formatting
                 const takenTime = log.takenAt ? formatTime(log.takenAt, true) : 'N/A';
                 const dueTime = log.nextDueAt ? formatTime(log.nextDueAt, true) : 'N/A';
-                return `${log.medicationName} - Taken: ${takenTime} - Next Due: ${dueTime}`;
+                // Ensure medicationName exists
+                const medName = log.medicationName || 'Unknown Medication';
+                return `${medName} - Taken: ${takenTime} - Next Due: ${dueTime}`;
             })
             .join('\n'); // Newline separated
 
@@ -320,8 +323,8 @@ const App = () => {
             // console.log(`ExportCSV Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
             // Ensure values exist, default to empty string if not
             const name = log.medicationName || '';
-            const takenAt = log.takenAt || '';
-            const nextDueAt = log.nextDueAt || '';
+            const takenAt = log.takenAt || ''; // These should be ISO strings from Firestore listener
+            const nextDueAt = log.nextDueAt || ''; // These should be ISO strings
             // Quote name and escape quotes within name
             return [`"${name.replace(/"/g, '""')}"`, takenAt, nextDueAt];
         });
@@ -353,7 +356,7 @@ const App = () => {
             console.log("ExportCSV: Download link clicked."); // Log: After click
             // Cleanup
             document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            URL.revokeObjectURL(url); // Release object URL memory
             toast.success("Log exported as CSV!");
         } else {
             console.error("ExportCSV: link.download attribute not supported.");
@@ -364,6 +367,9 @@ const App = () => {
         toast.error("Export failed", { description: "An unexpected error occurred." });
     }
   }, [medLogs]); // Depends on medLogs
+
+  // --- End Log Action Handlers ---
+
   // --- End Handlers ---
 
   // --- Render Logic ---
