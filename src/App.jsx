@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     Pill, Check, Edit, PlusCircle, MoreHorizontal, ClipboardCopy, Download,
-    LayoutGrid, CalendarDays, Bell, BellOff // Icons
+    LayoutGrid, CalendarDays, Bell, BellOff, LogOut, Sun, Moon // Icons
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -25,6 +25,9 @@ import MedicationGrid from './components/MedicationGrid';
 import LogList from './components/LogList';
 import AddEditMedicationDialog from './components/AddEditMedicationDialog';
 import MedicationCalendarView from './components/MedicationCalendarView';
+import { ThemeProvider, useTheme } from './components/ThemeProvider'; // Import useTheme hook
+
+
 
 // Import Helpers
 import { formatTime } from '@/lib/utils';
@@ -54,6 +57,8 @@ const App = () => {
   const [notificationPermission, setNotificationPermission] = useState('default');
   const [isFcmSupported, setIsFcmSupported] = useState(false);
   // --- End State ---
+
+  const { setTheme, resolvedTheme } = useTheme(); // Get theme functions/state
 
   // --- Effects ---
   // Check FCM support and initial permission status
@@ -264,6 +269,31 @@ const App = () => {
             </p>
           </div>
           <div className="flex-1 flex justify-end order-3">
+          <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="icon">
+                            {/* Show Sun or Moon based on the currently RESOLVED theme */}
+                            {resolvedTheme === 'dark' ? (
+                                <Moon className="h-[1.2rem] w-[1.2rem] transition-all" />
+                            ) : (
+                                <Sun className="h-[1.2rem] w-[1.2rem] transition-all" />
+                            )}
+                            <span className="sr-only">Toggle theme</span>
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                        {/* Call setTheme with the user's PREFERENCE */}
+                        <DropdownMenuItem onClick={() => setTheme('light')}>
+                            Light
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setTheme('dark')}>
+                            Dark
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setTheme('system')}>
+                            System
+                        </DropdownMenuItem>
+                    </DropdownMenuContent>
+                </DropdownMenu>
             {user && (
               <Button variant="outline" size="sm" onClick={handleSignOut}>
                 Sign Out
