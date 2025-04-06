@@ -1,7 +1,8 @@
 import React from 'react';
 import { PlusCircle } from "lucide-react";
 import MedicationCard from './MedicationCard'; // Import the card component
-import { Card } from "@/components/ui/card"; // For the placeholder card
+// Import Card and its necessary sub-components
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button"; // For the placeholder button
 
 /**
@@ -29,8 +30,9 @@ const MedicationGrid = ({
   return (
     <>
       {/* Display message or placeholder if no medications exist */}
-      {medications.length === 0 && !isManageMode ? ( // Only show if not managing and empty
-         <Card className="text-center py-8 border-dashed col-span-1 sm:col-span-2 lg:col-span-3"> {/* Span full width */}
+      {medications.length === 0 && !isManageMode ? (
+         // Use CardHeader, CardTitle, CardContent here
+         <Card className="text-center py-8 border-dashed col-span-1 sm:col-span-2 lg:col-span-3">
              <CardHeader>
                  <CardTitle className="text-muted-foreground">No Medications Added</CardTitle>
              </CardHeader>
@@ -56,8 +58,7 @@ const MedicationGrid = ({
              />
            ))}
            {/* Placeholder card to add medication when not in manage mode (optional) */}
-           {/* You might remove this if the "Add New" button in the header is sufficient */}
-           {!isManageMode && medications.length < 6 && ( // Example condition: show if less than 6 meds
+           {!isManageMode && medications.length < 6 && (
               <Card className="border-dashed border-2 hover:border-primary transition-colors flex flex-col items-center justify-center min-h-[200px] aspect-square sm:aspect-auto">
                  <Button variant="ghost" className="text-muted-foreground hover:text-primary h-auto flex-col p-4" onClick={handleAddNewMedication}>
                      <PlusCircle size={32} className="mb-2"/>
