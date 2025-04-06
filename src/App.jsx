@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-    Pill, Check, Edit, PlusCircle, MoreHorizontal, ClipboardCopy, Download,
-    LayoutGrid, CalendarDays, Bell, BellOff, LogOut, Sun, Moon // Icons
+  Pill, Check, Edit, PlusCircle, MoreHorizontal, ClipboardCopy, Download,
+  LayoutGrid, CalendarDays, Bell, BellOff, LogOut, Sun, Moon // Icons
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { auth, db } from './firebaseConfig'; // Assuming you created this file in Step 2
 import { onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider } from "firebase/auth";
 import {
-    collection, doc, onSnapshot, addDoc, setDoc, deleteDoc, query, orderBy, Timestamp
+  collection, doc, onSnapshot, addDoc, setDoc, deleteDoc, query, orderBy, Timestamp
 } from "firebase/firestore";
 import { getMessaging, getToken, isSupported } from "firebase/messaging"; // Messaging imports
 
@@ -73,8 +73,8 @@ const App = () => {
         console.log("FCM is not supported in this browser.");
       }
     }).catch(err => {
-        console.error("Error checking FCM support:", err);
-        setIsFcmSupported(false); // Assume not supported on error
+      console.error("Error checking FCM support:", err);
+      setIsFcmSupported(false); // Assume not supported on error
     });
   }, []);
 
@@ -87,10 +87,10 @@ const App = () => {
       setUser(currentUser);
       setLoadingAuth(false);
       if (!currentUser) {
-         setMedications([]); setMedLogs([]); setNextDueTimes({}); setLoadingData(true);
-         setIsManageMode(false); setVisibleLogCount(LOGS_PER_PAGE);
+        setMedications([]); setMedLogs([]); setNextDueTimes({}); setLoadingData(true);
+        setIsManageMode(false); setVisibleLogCount(LOGS_PER_PAGE);
       } else {
-          if (isFcmSupported) { setNotificationPermission(Notification.permission); }
+        if (isFcmSupported) { setNotificationPermission(Notification.permission); }
       }
     });
     return () => { console.log("Cleaning up Auth listener."); unsubscribeAuth(); };
@@ -101,20 +101,20 @@ const App = () => {
     if (!user) { setLoadingData(false); return; }
     console.log(`Setting up Firestore listeners for user: ${user.uid}`);
     setLoadingData(true);
-    let unsubMeds = () => {};
-    let unsubLogs = () => {};
+    let unsubMeds = () => { };
+    let unsubLogs = () => { };
     try {
-        const medsCollectionRef = collection(db, 'users', user.uid, 'medications');
-        unsubMeds = onSnapshot(medsCollectionRef, (snap) => {
-          setMedications(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-          setLoadingData(false); console.log("Firestore: Medications updated.");
-        }, (err) => { console.error("Firestore meds listener error:", err); toast.error("Failed to load meds"); setLoadingData(false); });
-        const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
-        const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc"));
-        unsubLogs = onSnapshot(logsQuery, (snap) => {
-          setMedLogs(snap.docs.map(doc => { const d = doc.data(); return { id: doc.id, ...d, takenAt: d.takenAt?.toDate().toISOString(), nextDueAt: d.nextDueAt?.toDate().toISOString() }; }));
-          setLoadingData(false); console.log("Firestore: Logs updated.");
-        }, (err) => { console.error("Firestore logs listener error:", err); toast.error("Failed to load history"); setLoadingData(false); });
+      const medsCollectionRef = collection(db, 'users', user.uid, 'medications');
+      unsubMeds = onSnapshot(medsCollectionRef, (snap) => {
+        setMedications(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        setLoadingData(false); console.log("Firestore: Medications updated.");
+      }, (err) => { console.error("Firestore meds listener error:", err); toast.error("Failed to load meds"); setLoadingData(false); });
+      const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
+      const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc"));
+      unsubLogs = onSnapshot(logsQuery, (snap) => {
+        setMedLogs(snap.docs.map(doc => { const d = doc.data(); return { id: doc.id, ...d, takenAt: d.takenAt?.toDate().toISOString(), nextDueAt: d.nextDueAt?.toDate().toISOString() }; }));
+        setLoadingData(false); console.log("Firestore: Logs updated.");
+      }, (err) => { console.error("Firestore logs listener error:", err); toast.error("Failed to load history"); setLoadingData(false); });
     } catch (error) { console.error("Error setting up Firestore listeners:", error); setLoadingData(false); toast.error("Error connecting to database."); }
     return () => { console.log(`Cleaning up Firestore listeners for user: ${user.uid}`); unsubMeds(); unsubLogs(); };
   }, [user]);
@@ -195,8 +195,25 @@ const App = () => {
     if (!user) { console.log("TakeMed: No user, aborting."); toast.error("Please sign in."); return; }
     const now = new Date(); const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
     const logEntry = { medicationId: med.id, medicationName: med.name, takenAt: Timestamp.fromDate(now), nextDueAt: Timestamp.fromDate(nextDue) };
-    try { const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs'); await addDoc(logsCollectionRef, logEntry); toast.info("Medication Taken", { description: `${med.name} logged.` }); }
-    catch (error) { console.error("Error logging med:", error); toast.error("Failed to log med", { description: error.message }); }
+    const reminderEntry = {
+      userId: user.uid, // Associate with the current user
+      medicationName: med.name,
+      dueAt: Timestamp.fromDate(nextDue), // When the reminder should be sent
+    };
+    try { 
+      const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');     
+      const remindersCollectionRef = collection(db, "scheduledReminders");
+
+      await Promise.all([
+        addDoc(logsCollectionRef, logEntry),
+        addDoc(remindersCollectionRef, reminderEntry)
+      ]);
+      toast.info("Medication Taken", { description: `${med.name} logged.` }); 
+    }
+    catch (error) { 
+      console.error("Error logging med and scheduling reminder:", error); 
+      toast.error("Failed to log med", { description: error.message });
+    }
   }, [user]);
 
   const handleSaveMedication = useCallback(async (medData, isEditing) => {
@@ -239,16 +256,16 @@ const App = () => {
 
   // --- Render Logic ---
   if (loadingAuth || (user && loadingData && medLogs.length === 0 && medications.length === 0)) {
-    return ( <div className="flex justify-center items-center min-h-screen text-muted-foreground"> {loadingAuth ? "Authenticating..." : "Loading Medication Data..."} </div> );
+    return (<div className="flex justify-center items-center min-h-screen text-muted-foreground"> {loadingAuth ? "Authenticating..." : "Loading Medication Data..."} </div>);
   }
 
   // Notification Button UI Logic
   let notificationButton = null;
   if (isFcmSupported && user) {
-      let buttonText = "Enable Notifications"; let buttonIcon = <Bell className="mr-2 h-4 w-4" />; let buttonDisabled = false; let tooltipText = "Click to allow medication reminders";
-      if (notificationPermission === 'granted') { buttonText = "Notifications On"; buttonIcon = <Bell className="mr-2 h-4 w-4 text-green-500" />; buttonDisabled = true; tooltipText = "Notifications are active"; }
-      else if (notificationPermission === 'denied') { buttonText = "Notifications Off"; buttonIcon = <BellOff className="mr-2 h-4 w-4" />; buttonDisabled = true; tooltipText = "Notifications blocked by browser"; }
-      notificationButton = ( <TooltipProvider delayDuration={100}><Tooltip> <TooltipTrigger asChild><span tabIndex={buttonDisabled ? 0 : -1}> <Button variant="outline" size="sm" onClick={handleRequestNotificationPermission} disabled={buttonDisabled} aria-label={tooltipText}> {buttonIcon} {buttonText} </Button> </span></TooltipTrigger> <TooltipContent><p>{tooltipText}</p></TooltipContent> </Tooltip></TooltipProvider> );
+    let buttonText = "Enable Notifications"; let buttonIcon = <Bell className="mr-2 h-4 w-4" />; let buttonDisabled = false; let tooltipText = "Click to allow medication reminders";
+    if (notificationPermission === 'granted') { buttonText = "Notifications On"; buttonIcon = <Bell className="mr-2 h-4 w-4 text-green-500" />; buttonDisabled = true; tooltipText = "Notifications are active"; }
+    else if (notificationPermission === 'denied') { buttonText = "Notifications Off"; buttonIcon = <BellOff className="mr-2 h-4 w-4" />; buttonDisabled = true; tooltipText = "Notifications blocked by browser"; }
+    notificationButton = (<TooltipProvider delayDuration={100}><Tooltip> <TooltipTrigger asChild><span tabIndex={buttonDisabled ? 0 : -1}> <Button variant="outline" size="sm" onClick={handleRequestNotificationPermission} disabled={buttonDisabled} aria-label={tooltipText}> {buttonIcon} {buttonText} </Button> </span></TooltipTrigger> <TooltipContent><p>{tooltipText}</p></TooltipContent> </Tooltip></TooltipProvider>);
   }
 
   return (
@@ -269,31 +286,31 @@ const App = () => {
             </p>
           </div>
           <div className="flex-1 flex justify-end order-3">
-          <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="icon">
-                            {/* Show Sun or Moon based on the currently RESOLVED theme */}
-                            {resolvedTheme === 'dark' ? (
-                                <Moon className="h-[1.2rem] w-[1.2rem] transition-all" />
-                            ) : (
-                                <Sun className="h-[1.2rem] w-[1.2rem] transition-all" />
-                            )}
-                            <span className="sr-only">Toggle theme</span>
-                        </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                        {/* Call setTheme with the user's PREFERENCE */}
-                        <DropdownMenuItem onClick={() => setTheme('light')}>
-                            Light
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setTheme('dark')}>
-                            Dark
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setTheme('system')}>
-                            System
-                        </DropdownMenuItem>
-                    </DropdownMenuContent>
-                </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon">
+                  {/* Show Sun or Moon based on the currently RESOLVED theme */}
+                  {resolvedTheme === 'dark' ? (
+                    <Moon className="h-[1.2rem] w-[1.2rem] transition-all" />
+                  ) : (
+                    <Sun className="h-[1.2rem] w-[1.2rem] transition-all" />
+                  )}
+                  <span className="sr-only">Toggle theme</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {/* Call setTheme with the user's PREFERENCE */}
+                <DropdownMenuItem onClick={() => setTheme('light')}>
+                  Light
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme('dark')}>
+                  Dark
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme('system')}>
+                  System
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             {user && (
               <Button variant="outline" size="sm" onClick={handleSignOut}>
                 Sign Out
@@ -305,56 +322,56 @@ const App = () => {
         {/* Conditional Content: Sign-In or Main App */}
         {!user ? (
           <div className="text-center py-10">
-             <h2 className="text-xl font-semibold mb-4">Welcome to MedTracker</h2>
-             <p className="text-muted-foreground mb-6">Sign in with Google to save and sync your medication schedule.</p>
-             <Button onClick={handleSignIn} size="lg">Sign In with Google</Button>
+            <h2 className="text-xl font-semibold mb-4">Welcome to MedTracker</h2>
+            <p className="text-muted-foreground mb-6">Sign in with Google to save and sync your medication schedule.</p>
+            <Button onClick={handleSignIn} size="lg">Sign In with Google</Button>
           </div>
         ) : (
           // Main Application UI (Tabs)
           <Tabs defaultValue="dashboard" className="w-full">
             <TabsList className="grid w-full grid-cols-2 mb-6">
-              <TabsTrigger value="dashboard"><LayoutGrid className="mr-2 h-4 w-4"/> Dashboard</TabsTrigger>
-              <TabsTrigger value="calendar"><CalendarDays className="mr-2 h-4 w-4"/> Calendar View</TabsTrigger>
+              <TabsTrigger value="dashboard"><LayoutGrid className="mr-2 h-4 w-4" /> Dashboard</TabsTrigger>
+              <TabsTrigger value="calendar"><CalendarDays className="mr-2 h-4 w-4" /> Calendar View</TabsTrigger>
             </TabsList>
             {/* Dashboard Content */}
             <TabsContent value="dashboard">
-               <section className="mb-8">
-                 <div className="flex justify-between items-center mb-4">
-                   <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
-                   <div className="flex gap-2">
-                     {/* Manage Button */}
-                     <Button variant={isManageMode ? "default" : "outline"} onClick={() => { console.log("Toggle Manage Mode clicked"); setIsManageMode(!isManageMode); }}>
-                       {isManageMode ? <Check size={16} className="mr-2"/> : <Edit size={16} className="mr-2" />}
-                       {isManageMode ? 'Done Managing' : 'Manage'}
-                     </Button>
-                     {/* Add New Button (in header) */}
-                     {isManageMode && ( <Button variant="outline" onClick={() => { console.log("Header Add New button clicked"); handleAddNewMedication(); }}> <PlusCircle size={16} className="mr-2" /> Add New </Button> )}
-                   </div>
-                 </div>
-                 <MedicationGrid
-                   medications={medications} nextDueTimes={nextDueTimes} currentTime={currentTime}
-                   handleTakeMedication={handleTakeMedication} handleEditMedication={handleEditMedication}
-                   isManageMode={isManageMode} handleDeleteMedication={handleDeleteMedication}
-                   handleAddNewMedication={handleAddNewMedication}
-                 />
-               </section>
-               <section>
-                 <div className="flex justify-between items-center mb-4">
-                   <h2 className="text-xl font-semibold text-foreground">Medication History</h2>
-                   <DropdownMenu>
-                     <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={medLogs.length === 0}><MoreHorizontal className="h-4 w-4 mr-2" /> Actions</Button></DropdownMenuTrigger>
-                     <DropdownMenuContent align="end">
-                       <DropdownMenuLabel>Log Actions</DropdownMenuLabel><DropdownMenuSeparator />
-                       <DropdownMenuItem onClick={handleCopyLog}><ClipboardCopy className="mr-2 h-4 w-4" /><span>Copy Full Log</span></DropdownMenuItem>
-                       <DropdownMenuItem onClick={handleExportCSV}><Download className="mr-2 h-4 w-4" /><span>Export as CSV</span></DropdownMenuItem>
-                     </DropdownMenuContent>
-                   </DropdownMenu>
-                 </div>
-                 <LogList
-                   medLogs={medLogs} visibleLogCount={visibleLogCount}
-                   handleLoadMoreLogs={handleLoadMoreLogs} logsPerPage={LOGS_PER_PAGE}
-                 />
-               </section>
+              <section className="mb-8">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
+                  <div className="flex gap-2">
+                    {/* Manage Button */}
+                    <Button variant={isManageMode ? "default" : "outline"} onClick={() => { console.log("Toggle Manage Mode clicked"); setIsManageMode(!isManageMode); }}>
+                      {isManageMode ? <Check size={16} className="mr-2" /> : <Edit size={16} className="mr-2" />}
+                      {isManageMode ? 'Done Managing' : 'Manage'}
+                    </Button>
+                    {/* Add New Button (in header) */}
+                    {isManageMode && (<Button variant="outline" onClick={() => { console.log("Header Add New button clicked"); handleAddNewMedication(); }}> <PlusCircle size={16} className="mr-2" /> Add New </Button>)}
+                  </div>
+                </div>
+                <MedicationGrid
+                  medications={medications} nextDueTimes={nextDueTimes} currentTime={currentTime}
+                  handleTakeMedication={handleTakeMedication} handleEditMedication={handleEditMedication}
+                  isManageMode={isManageMode} handleDeleteMedication={handleDeleteMedication}
+                  handleAddNewMedication={handleAddNewMedication}
+                />
+              </section>
+              <section>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-semibold text-foreground">Medication History</h2>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={medLogs.length === 0}><MoreHorizontal className="h-4 w-4 mr-2" /> Actions</Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Log Actions</DropdownMenuLabel><DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={handleCopyLog}><ClipboardCopy className="mr-2 h-4 w-4" /><span>Copy Full Log</span></DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleExportCSV}><Download className="mr-2 h-4 w-4" /><span>Export as CSV</span></DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <LogList
+                  medLogs={medLogs} visibleLogCount={visibleLogCount}
+                  handleLoadMoreLogs={handleLoadMoreLogs} logsPerPage={LOGS_PER_PAGE}
+                />
+              </section>
             </TabsContent>
             {/* Calendar Content */}
             <TabsContent value="calendar"> <MedicationCalendarView medLogs={medLogs} /> </TabsContent>
@@ -362,7 +379,7 @@ const App = () => {
         )}
 
         {/* Add/Edit Dialog */}
-        {user && ( <AddEditMedicationDialog open={isDialogOpen} onOpenChange={handleDialogChange} medication={editingMedication} onSave={handleSaveMedication} medications={medications} /> )}
+        {user && (<AddEditMedicationDialog open={isDialogOpen} onOpenChange={handleDialogChange} medication={editingMedication} onSave={handleSaveMedication} medications={medications} />)}
       </div>
     </>
   );
