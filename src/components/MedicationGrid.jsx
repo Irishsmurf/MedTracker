@@ -1,12 +1,21 @@
 import React from 'react';
 import { PlusCircle } from "lucide-react";
 import MedicationCard from './MedicationCard'; // Import the card component
-// Import Card and its necessary sub-components
+// Import Card and its necessary sub-components (for empty state)
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button"; // For the placeholder button
+import { Button } from "@/components/ui/button"; // For the empty state button
 
 /**
  * Component to render the grid of medication cards.
+ * @param {object} props
+ * @param {Array} props.medications - Array of medication objects.
+ * @param {object} props.nextDueTimes - Object mapping med ID to next due ISO string.
+ * @param {Date} props.currentTime - The current time object.
+ * @param {Function} props.handleTakeMedication - Callback for taking medication.
+ * @param {Function} props.handleEditMedication - Callback for editing medication.
+ * @param {boolean} props.isManageMode - Flag indicating if manage mode is active.
+ * @param {Function} props.handleDeleteMedication - Callback for deleting medication.
+ * @param {Function} props.handleAddNewMedication - Callback to open the add medication dialog.
  */
 const MedicationGrid = ({
   medications,
@@ -16,23 +25,23 @@ const MedicationGrid = ({
   handleEditMedication,
   isManageMode,
   handleDeleteMedication,
-  handleAddNewMedication // This is the handler for the placeholder card too
+  handleAddNewMedication
 }) => {
 
-  // --- Debugging Log ---
+  // Debugging Log (can be removed later)
   // console.log(`Rendering MedicationGrid, Manage Mode: ${isManageMode}, handleAddNew prop exists: ${!!handleAddNewMedication}`);
 
   return (
     <>
       {/* Display message or placeholder if no medications exist */}
-      {medications.length === 0 && !isManageMode ? (
+      {medications.length === 0 ? ( // Show empty state if no medications exist (regardless of manage mode)
          <Card className="text-center py-8 border-dashed col-span-1 sm:col-span-2 lg:col-span-3">
              <CardHeader>
                  <CardTitle className="text-muted-foreground">No Medications Added</CardTitle>
              </CardHeader>
              <CardContent>
                  <Button
-                   // --- Debugging Log ---
+                   // Debugging Log (can be removed later)
                    onClick={() => { console.log("Add First Medication button clicked"); handleAddNewMedication(); }}
                  >
                      <PlusCircle size={16} className="mr-2" /> Add Your First Medication
@@ -55,19 +64,7 @@ const MedicationGrid = ({
                onDelete={handleDeleteMedication}
              />
            ))}
-           {/* Placeholder card to add medication when not in manage mode (optional) */}
-           {!isManageMode && medications.length < 6 && (
-              <Card className="border-dashed border-2 hover:border-primary transition-colors flex flex-col items-center justify-center min-h-[200px] aspect-square sm:aspect-auto">
-                 <Button
-                   variant="ghost" className="text-muted-foreground hover:text-primary h-auto flex-col p-4"
-                   // --- Debugging Log ---
-                   onClick={() => { console.log("Add Medication placeholder clicked"); handleAddNewMedication(); }}
-                 >
-                     <PlusCircle size={32} className="mb-2"/>
-                     Add Medication
-                 </Button>
-              </Card>
-           )}
+           {}
          </div>
       )}
     </>
