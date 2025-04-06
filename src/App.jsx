@@ -1,619 +1,401 @@
-import React, { useState, useEffect } from 'react';
-import { Analytics } from "@vercel/analytics/react";
-import { PlusCircle, X, Edit, Check } from "lucide-react";
+import React, { useState, useEffect, useCallback } from 'react';
+// Updated Lucide imports
+import { PlusCircle, X, Edit, Check, Clock, Trash2, Pill, MoreHorizontal, ClipboardCopy, Download, Plus } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-const MedicationTracker = () => {
-  // Initialize medications from localStorage
-  const [medications, setMedications] = useState(() => {
-    const savedMeds = localStorage.getItem('medications');
-    return savedMeds ? JSON.parse(savedMeds) : [
-      { id: 'codeine', name: 'Codeine', interval: 6 },
-      { id: 'ibuprofen', name: 'Ibuprofen', interval: 8 },
-      { id: 'augmentin', name: 'Augmentin', interval: 8 },
-    ];
-  });
+// --- Shadcn/ui Components ---
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogClose,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+// Import Tooltip components
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+// --- End Shadcn/ui Components ---
 
-  // State for managing medication editing
-  const [isEditing, setIsEditing] = useState(false);
-  const [newMedication, setNewMedication] = useState({ name: '', interval: 8 });
-  const [editingMedication, setEditingMedication] = useState(null);
+// --- Sonner Toast Components ---
+import { Toaster as SonnerToaster, toast } from "sonner";
+// --- End Sonner Toast Components ---
 
-  // Initialize state with data from localStorage
-  const [medLogs, setMedLogs] = useState(() => {
-    const savedLogs = localStorage.getItem('medLogs');
-    return savedLogs ? JSON.parse(savedLogs) : [];
-  });
+// --- Constants ---
+const LOGS_PER_PAGE = 25;
+// --- End Constants ---
 
-  const [nextDueTimes, setNextDueTimes] = useState(() => {
-    const savedNextDueTimes = localStorage.getItem('nextDueTimes');
-    return savedNextDueTimes ? JSON.parse(savedNextDueTimes) : {};
-  });
 
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [notifiedMeds, setNotifiedMeds] = useState(() => {
-    const savedNotifiedMeds = localStorage.getItem('notifiedMeds');
-    return savedNotifiedMeds ? JSON.parse(savedNotifiedMeds) : {};
-  });
-  const [swRegistration, setSwRegistration] = useState(null);
-  const [exportMessage, setExportMessage] = useState('');
+// --- Helper Functions (formatTime, calculateTimeInfo remain the same) ---
+const formatTime = (dateString, includeDate = false) => {
+  if (!dateString) return '--:--';
+  const date = new Date(dateString);
+  const timeOptions = { hour: '2-digit', minute: '2-digit', hour12: true };
+  if (includeDate) {
+    return date.toLocaleString([], { ...timeOptions, year: 'numeric', month: 'short', day: 'numeric' });
+  }
+  return date.toLocaleTimeString([], timeOptions);
+};
 
-  // Save medications to localStorage when they change
-  useEffect(() => {
-    localStorage.setItem('medications', JSON.stringify(medications));
-  }, [medications]);
-
-  // Register service worker
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/service-worker.js')
-        .then(registration => {
-          console.log('Service Worker registered with scope:', registration.scope);
-          setSwRegistration(registration);
-        })
-        .catch(error => {
-          console.error('Service Worker registration failed:', error);
-        });
-    }
-  }, []);
-
-  // Request notification permission
-  const requestNotificationPermission = async () => {
-    if (!("Notification" in window)) {
-      alert("This browser does not support desktop notifications");
-      return false;
-    }
-    
-    if (Notification.permission === "granted") {
-      setNotificationsEnabled(true);
-      return true;
-    }
-    
-    if (Notification.permission !== "denied") {
-      const permission = await Notification.requestPermission();
-      const granted = permission === "granted";
-      setNotificationsEnabled(granted);
-      return granted;
-    }
-    
-    return false;
-  };
-
-  // Function to schedule a notification
-  const scheduleNotification = async (medication, dueTime) => {
-    if (!swRegistration || !notificationsEnabled) return;
-
-    // Calculate when to show the notification (at due time)
-    const now = new Date();
-    const dueDate = new Date(dueTime);
-    const delayInMs = Math.max(0, dueDate.getTime() - now.getTime());
-
-    // Store the timer ID so we can cancel it if medication is taken early
-    const timerId = setTimeout(() => {
-      // Check if still due (might have been taken early)
-      const currentDueTime = nextDueTimes[medication.id];
-      if (currentDueTime === dueTime) {
-        // Show notification directly if browser is open
-        if (document.visibilityState === 'visible') {
-          new Notification(`Time to take ${medication.name}`, {
-            body: `Your ${medication.name} is now due.`,
-            icon: "/favicon.ico"
-          });
-        } 
-        // Otherwise use service worker for background notification
-        else if (swRegistration.showNotification) {
-          swRegistration.showNotification(`Time to take ${medication.name}`, {
-            body: `Your ${medication.name} is now due.`,
-            icon: '/favicon.ico',
-            badge: '/favicon.ico',
-            data: {
-              url: window.location.href
-            }
-          });
-        }
-        
-        // Mark as notified
-        setNotifiedMeds(prev => ({
-          ...prev,
-          [medication.id]: dueTime
-        }));
-      }
-    }, delayInMs);
-
-    // Store the timer in localStorage to survive page refreshes
-    const scheduledNotifications = JSON.parse(localStorage.getItem('scheduledNotifications') || '{}');
-    scheduledNotifications[medication.id] = {
-      medicationId: medication.id,
-      dueTime: dueTime,
-      timerId: timerId.toString()
-    };
-    localStorage.setItem('scheduledNotifications', JSON.stringify(scheduledNotifications));
-  };
-
-  // Enable notifications
-  const enableNotifications = async () => {
-    const granted = await requestNotificationPermission();
-    if (granted) {
-      // Create a test notification
-      if (swRegistration) {
-        swRegistration.showNotification("Medication Tracker", {
-          body: "Notifications enabled successfully!",
-          icon: "/favicon.ico"
-        });
-      } else {
-        new Notification("Medication Tracker", {
-          body: "Notifications enabled successfully!",
-          icon: "/favicon.ico"
-        });
-      }
-
-      // Schedule notifications for all currently due medications
-      Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
-        const medication = medications.find(med => med.id === medId);
-        if (medication) {
-          scheduleNotification(medication, dueTimeStr);
-        }
-      });
-    }
-  };
-
-  // Update current time every minute
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 60000);
-    
-    return () => clearInterval(timer);
-  }, []);
-
-  // Save notified meds to localStorage
-  useEffect(() => {
-    localStorage.setItem('notifiedMeds', JSON.stringify(notifiedMeds));
-  }, [notifiedMeds]);
-
-  // Save data to localStorage whenever it changes
-  useEffect(() => {
-    localStorage.setItem('medLogs', JSON.stringify(medLogs));
-  }, [medLogs]);
-
-  // When nextDueTimes changes, schedule notifications
-  useEffect(() => {
-    localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes));
-    
-    // Schedule notifications if enabled
-    if (notificationsEnabled && swRegistration) {
-      Object.entries(nextDueTimes).forEach(([medId, dueTimeStr]) => {
-        const medication = medications.find(med => med.id === medId);
-        if (medication) {
-          scheduleNotification(medication, dueTimeStr);
-        }
-      });
-    }
-  }, [nextDueTimes, notificationsEnabled, swRegistration, medications]);
-
-  // Function to handle taking medication
-  const takeMedication = (med) => {
-    const now = new Date();
-    const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-    console.log(`Taking ${med.name} at ${now.toISOString()}`);
-    
-    // Create a log entry
-    const logEntry = {
-      id: Date.now(),
-      medicationId: med.id,
-      medicationName: med.name,
-      takenAt: now.toISOString(),
-      nextDueAt: nextDue.toISOString()
-    };
-    
-    // Update state
-    setMedLogs([logEntry, ...medLogs]);
-    setNextDueTimes({
-      ...nextDueTimes,
-      [med.id]: nextDue.toISOString()
-    });
-  };
-
-  // Helper function to format date
-  const formatTime = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + 
-           ' ' + date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
-
-  // Function to calculate time remaining
-  const getTimeRemaining = (dueTimeString) => {
-    if (!dueTimeString) return { hours: 0, minutes: 0, isOverdue: false };
-    
+const calculateTimeInfo = (dueTimeString, intervalHours, currentTime) => {
+    if (!dueTimeString) return { hours: 0, minutes: 0, isOverdue: false, progress: 0, takenAt: null };
     const dueTime = new Date(dueTimeString);
-    const diff = dueTime - currentTime;
-    
-    if (diff <= 0) {
-      return { hours: 0, minutes: 0, isOverdue: true };
-    }
-    
+    const intervalMillis = intervalHours * 60 * 60 * 1000;
+    const takenTime = new Date(dueTime.getTime() - intervalMillis);
+    const totalDuration = intervalMillis;
+    const elapsed = currentTime.getTime() - takenTime.getTime();
+    const diff = dueTime.getTime() - currentTime.getTime();
+    if (diff <= 0) return { hours: 0, minutes: 0, isOverdue: true, progress: 100, takenAt: takenTime };
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-    
-    return { hours, minutes, isOverdue: false };
-  };
-  
-  // Generate CSV data from medLogs
-  const generateCSV = () => {
-    if (medLogs.length === 0) return '';
-    
-    // Define headers
-    const headers = ['Medication', 'Taken At', 'Next Due At'];
-    
-    // Create CSV rows
-    const rows = medLogs.map(log => [
-      log.medicationName,
-      new Date(log.takenAt).toLocaleString(),
-      new Date(log.nextDueAt).toLocaleString()
-    ]);
-    
-    // Combine headers and rows
-    return [headers, ...rows].map(row => row.join(',')).join('\n');
-  };
-  
-  // Generate TSV data from medLogs
-  const generateTSV = () => {
-    if (medLogs.length === 0) return '';
-    
-    // Define headers
-    const headers = ['Medication', 'Taken At', 'Next Due At'];
-    
-    // Create TSV rows
-    const rows = medLogs.map(log => [
-      log.medicationName,
-      new Date(log.takenAt).toLocaleString(),
-      new Date(log.nextDueAt).toLocaleString()
-    ]);
-    
-    // Combine headers and rows
-    return [headers, ...rows].map(row => row.join('\t')).join('\n');
-  };
-  
-  // Export CSV file
-  const exportCSV = () => {
-    const csvData = generateCSV();
-    if (!csvData) {
-      setExportMessage('No data to export');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
-    
-    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `medication-log-${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    setExportMessage('CSV exported successfully');
-    setTimeout(() => setExportMessage(''), 3000);
-  };
-  
-  // Copy TSV to clipboard
-  const copyToClipboard = async () => {
-    const tsvData = generateTSV();
-    if (!tsvData) {
-      setExportMessage('No data to copy');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
-    
-    try {
-      await navigator.clipboard.writeText(tsvData);
-      setExportMessage('Copied to clipboard');
-      setTimeout(() => setExportMessage(''), 3000);
-    } catch (err) {
-      console.error('Failed to copy: ', err);
-      setExportMessage('Failed to copy to clipboard');
-      setTimeout(() => setExportMessage(''), 3000);
-    }
-  };
+    const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
+    return { hours, minutes, isOverdue: false, progress, takenAt: takenTime };
+};
+// --- End Helper Functions ---
 
-  // Add new medication
-  const addMedication = () => {
-    if (!newMedication.name.trim()) {
-      setExportMessage('Please enter a medication name');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
+// --- Child Components ---
 
-    // Generate a unique ID based on the name
-    const id = newMedication.name.toLowerCase().replace(/\s+/g, '-');
-    
-    // Check if a medication with this name already exists
-    if (medications.some(med => med.name.toLowerCase() === newMedication.name.toLowerCase())) {
-      setExportMessage('A medication with this name already exists');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
-    
-    const newMed = {
-      id,
-      name: newMedication.name,
-      interval: parseInt(newMedication.interval, 10) || 8
-    };
-    
-    setMedications([...medications, newMed]);
-    setNewMedication({ name: '', interval: 8 });
-    setIsEditing(false);
+// --- MedicationCard (MODIFIED) ---
+const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onEdit, isManageMode, onDelete }) => {
+  const timeInfo = calculateTimeInfo(nextDueTimes[med.id], med.interval, currentTime);
+  const getProgressColorClass = () => {
+    if (timeInfo.isOverdue) return "stroke-destructive";
+    if (!nextDueTimes[med.id]) return "stroke-muted";
+    if (timeInfo.progress < 30) return "stroke-[--chart-2]";
+    if (timeInfo.progress < 70) return "stroke-[--chart-5]";
+    return "stroke-[--chart-1]";
   };
+  const progressColorClass = getProgressColorClass();
 
-  // Start editing a medication
-  const startEditMedication = (med) => {
-    setEditingMedication({ ...med });
-  };
+  return (
+    <Card className="relative overflow-hidden transition-all hover:shadow-md flex flex-col h-full">
+      {/* SVG Progress remains the same */}
+      <svg className="absolute top-0 left-0 w-full h-full -rotate-90 opacity-20 pointer-events-none" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="45" fill="transparent" className="stroke-border" strokeWidth="6" />
+        {nextDueTimes[med.id] && (
+          <circle cx="50" cy="50" r="45" fill="transparent" className={cn(progressColorClass, "transition-all duration-500 ease-linear")} strokeWidth="6" strokeLinecap="round" strokeDasharray="283" strokeDashoffset={283 - (283 * timeInfo.progress / 100)}/>
+        )}
+      </svg>
 
-  // Save edited medication
-  const saveEditedMedication = () => {
-    if (!editingMedication.name.trim()) {
-      setExportMessage('Medication name cannot be empty');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
+      {/* Card Header remains the same */}
+      <CardHeader className="relative z-10 pb-2">
+        <CardTitle className="flex items-center justify-between">
+          <span className="truncate">{med.name}</span>
+          {isManageMode && (
+            <div className="flex items-center space-x-1">
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary" onClick={() => onEdit(med)}><Edit size={16} /></Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onDelete(med.id)}><Trash2 size={16} /></Button>
+            </div>
+          )}
+        </CardTitle>
+        <CardDescription>Every {med.interval} hours</CardDescription>
+      </CardHeader>
 
-    setMedications(medications.map(med => 
-      med.id === editingMedication.id ? editingMedication : med
-    ));
-    setEditingMedication(null);
-  };
+      {/* Card Content remains the same */}
+      <CardContent className="relative z-10 flex-grow flex flex-col items-center justify-center text-center pb-4">
+        {timeInfo.isOverdue ? (
+          <span className="text-destructive font-bold text-lg animate-pulse">TAKE NOW</span>
+        ) : nextDueTimes[med.id] ? (
+          <div className="text-center">
+            <div className="text-2xl font-semibold tabular-nums">{timeInfo.hours}h {timeInfo.minutes}m</div>
+            <div className="text-xs text-muted-foreground">until next dose at {formatTime(nextDueTimes[med.id])}</div>
+          </div>
+        ) : (
+          <span className="text-muted-foreground italic">Ready to take first dose</span>
+        )}
+      </CardContent>
 
-  // Delete medication
-  const deleteMedication = (medId) => {
-    // Remove from medications list
-    setMedications(medications.filter(med => med.id !== medId));
-    
-    // Clean up nextDueTimes
-    const updatedNextDueTimes = { ...nextDueTimes };
-    delete updatedNextDueTimes[medId];
-    setNextDueTimes(updatedNextDueTimes);
-    
-    // Clean up notifiedMeds
-    const updatedNotifiedMeds = { ...notifiedMeds };
-    delete updatedNotifiedMeds[medId];
-    setNotifiedMeds(updatedNotifiedMeds);
-    
-    // Note: We're keeping the medication logs for record-keeping
+      {/* Card Footer (MODIFIED) */}
+      <CardFooter className="relative z-10 pt-0 justify-center"> {/* Center footer content */}
+        <TooltipProvider delayDuration={200}> {/* Add TooltipProvider */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* Updated Button: Icon only, not full width */}
+              <Button
+                onClick={() => onTake(med)}
+                variant={timeInfo.isOverdue ? "destructive" : "default"}
+                disabled={isManageMode}
+                size="lg" // Use a slightly larger size for better tap target
+                aria-label={`Take ${med.name}`} // Add aria-label for accessibility
+              >
+                <Pill size={18} /> {/* Use Pill icon, slightly larger */}
+                {/* Text removed */}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Take {med.name}</p> {/* Tooltip shows the full action */}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </CardFooter>
+    </Card>
+  );
+});
+
+// AddEditMedicationDialog remains the same
+const AddEditMedicationDialog = ({ open, onOpenChange, medication, onSave, medications }) => {
+  const [name, setName] = useState('');
+  const [interval, setIntervalValue] = useState(8);
+  const [error, setError] = useState('');
+  const isEditing = medication !== null;
+
+  useEffect(() => {
+    if (medication) { setName(medication.name); setIntervalValue(medication.interval); setError(''); }
+    else { setName(''); setIntervalValue(8); setError(''); }
+  }, [medication, open]);
+
+  const handleSave = () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) { setError('Medication name cannot be empty.'); return; }
+    if (!interval || interval < 1 || interval > 72) { setError('Interval must be between 1 and 72 hours.'); return; }
+    const existingMed = medications.find(m => m.name.toLowerCase() === trimmedName.toLowerCase());
+    if (existingMed && (!isEditing || existingMed.id !== medication.id)) { setError('A medication with this name already exists.'); return; }
+    const medData = { id: isEditing ? medication.id : trimmedName.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(), name: trimmedName, interval: parseInt(interval, 10) };
+    onSave(medData, isEditing);
+    toast.success(`Medication ${isEditing ? 'updated' : 'added'}`, { description: `${medData.name} (every ${medData.interval} hours) has been saved.` });
+    onOpenChange(false);
   };
 
   return (
-    <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-center mb-6">Medication Tracker</h1>
-        
-        {/* Notification permission button */}
-        {!notificationsEnabled && (
-          <div className="mb-4 bg-blue-50 p-3 rounded-lg border border-blue-200">
-            <p className="text-sm text-blue-800 mb-2">
-              Enable notifications to be alerted when medications are due.
-            </p>
-            <button
-              onClick={enableNotifications}
-              className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 px-3 rounded"
-            >
-              Enable Notifications
-            </button>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>{isEditing ? 'Edit Medication' : 'Add New Medication'}</DialogTitle>
+          <DialogDescription>{isEditing ? `Update the details for ${medication?.name}.` : 'Enter the details for the new medication.'}</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-4">
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="name" className="text-right">Name</Label>
+            <Input id="name" value={name} onChange={(e) => { setName(e.target.value); setError(''); }} className="col-span-3" placeholder="e.g., Ibuprofen"/>
           </div>
-        )}
-        
-        {/* Medication Management UI */}
-        <div className="mb-6">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="text-lg font-semibold">Your Medications</h2>
-            <button 
-              onClick={() => setIsEditing(!isEditing)}
-              className="text-blue-500 flex items-center text-sm"
-            >
-              {isEditing ? 'Done' : 'Manage'}
-            </button>
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="interval" className="text-right">Interval (hrs)</Label>
+            <Input id="interval" type="number" value={interval} onChange={(e) => { setIntervalValue(parseInt(e.target.value) || 1); setError(''); }} className="col-span-3" min="1" max="72"/>
           </div>
-          
-          {/* Medication cards */}
-          <div className="grid grid-cols-3 gap-4">
-            {medications.map((med) => {
-              const timeRemaining = getTimeRemaining(nextDueTimes[med.id]);
-              const buttonClass = timeRemaining.isOverdue 
-                ? "bg-red-500 hover:bg-red-600" 
-                : "bg-blue-500 hover:bg-blue-600";
-              
-              return (
-                <div key={med.id} className="flex flex-col">
-                  {isEditing ? (
-                    // Edit mode
-                    <div className="border border-gray-300 rounded-lg p-2 bg-white h-full flex flex-col">
-                      {editingMedication && editingMedication.id === med.id ? (
-                        // Editing this specific medication
-                        <>
-                          <input
-                            type="text"
-                            value={editingMedication.name}
-                            onChange={(e) => setEditingMedication({...editingMedication, name: e.target.value})}
-                            className="border border-gray-300 rounded p-1 mb-1 text-sm"
-                            placeholder="Medication name"
-                          />
-                          <div className="flex items-center mb-1">
-                            <label className="text-xs mr-1">Hours:</label>
-                            <input
-                              type="number"
-                              value={editingMedication.interval}
-                              onChange={(e) => setEditingMedication({...editingMedication, interval: parseInt(e.target.value) || 1})}
-                              className="border border-gray-300 rounded p-1 w-full text-sm"
-                              min="1"
-                              max="72"
-                            />
-                          </div>
-                          <div className="flex justify-between mt-auto pt-1">
-                            <button 
-                              onClick={() => setEditingMedication(null)}
-                              className="p-1 text-gray-500 rounded"
-                            >
-                              <X size={16} />
-                            </button>
-                            <button 
-                              onClick={saveEditedMedication}
-                              className="p-1 text-green-500 rounded"
-                            >
-                              <Check size={16} />
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        // Display with edit/delete options
-                        <>
-                          <div className="font-medium mb-1 truncate">{med.name}</div>
-                          <div className="text-xs text-gray-500 mb-1">Every {med.interval} hours</div>
-                          <div className="flex justify-between mt-auto pt-1">
-                            <button 
-                              onClick={() => deleteMedication(med.id)}
-                              className="p-1 text-red-500 rounded"
-                            >
-                              <X size={16} />
-                            </button>
-                            <button 
-                              onClick={() => startEditMedication(med)}
-                              className="p-1 text-blue-500 rounded"
-                            >
-                              <Edit size={16} />
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    // Normal mode
-                    <>
-                      <button
-                        onClick={() => takeMedication(med)}
-                        className={`${buttonClass} text-white font-bold py-3 px-4 rounded-lg w-full`}
-                      >
-                        {med.name}
-                      </button>
-                      <div className="mt-2 text-center text-sm">
-                        {nextDueTimes[med.id] ? (
-                          timeRemaining.isOverdue ? (
-                            <span className="text-red-600 font-bold">TAKE NOW</span>
-                          ) : (
-                            <span>
-                              {timeRemaining.hours}h {timeRemaining.minutes}m left
-                            </span>
-                          )
-                        ) : (
-                          <span className="text-gray-500">Not taken yet</span>
-                        )}
-                      </div>
-                      <div className="text-xs text-gray-500 text-center">
-                        Every {med.interval} hours
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-            
-            {/* Add new medication button/form */}
-            {isEditing && (
-              <div className="border border-gray-300 border-dashed rounded-lg p-2 flex flex-col items-center justify-center bg-white">
-                {newMedication.name || newMedication.interval !== 8 ? (
-                  // Show form if user has started entering data
-                  <div className="w-full">
-                    <input
-                      type="text"
-                      value={newMedication.name}
-                      onChange={(e) => setNewMedication({...newMedication, name: e.target.value})}
-                      className="border border-gray-300 rounded p-1 mb-1 w-full text-sm"
-                      placeholder="Medication name"
-                    />
-                    <div className="flex items-center mb-2">
-                      <label className="text-xs mr-1">Hours:</label>
-                      <input
-                        type="number"
-                        value={newMedication.interval}
-                        onChange={(e) => setNewMedication({...newMedication, interval: parseInt(e.target.value) || 1})}
-                        className="border border-gray-300 rounded p-1 w-full text-sm"
-                        min="1"
-                        max="72"
-                      />
-                    </div>
-                    <div className="flex justify-end">
-                      <button 
-                        onClick={addMedication}
-                        className="bg-green-500 hover:bg-green-600 text-white text-xs py-1 px-2 rounded"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  // Show just the add button initially
-                  <button 
-                    onClick={() => setNewMedication({name: '', interval: 8})}
-                    className="flex flex-col items-center text-blue-500"
-                  >
-                    <PlusCircle size={24} />
-                    <span className="text-xs mt-1">Add Medication</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+          {error && <p className="col-span-4 text-sm text-destructive text-center">{error}</p>}
         </div>
-      </div>
+        <DialogFooter>
+          <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+          <Button type="button" onClick={handleSave}>Save Changes</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+
+// --- Main App Component (Handlers and other sections remain the same) ---
+const MedicationTracker = () => {
+
+  // --- State Initialization ---
+  const [medications, setMedications] = useState(() => {
+    try { const savedMeds = localStorage.getItem('medications'); return savedMeds ? JSON.parse(savedMeds) : [{ id: 'codeine-1', name: 'Codeine', interval: 6 }, { id: 'ibuprofen-2', name: 'Ibuprofen', interval: 8 }, { id: 'augmentin-3', name: 'Augmentin', interval: 8 }]; }
+    catch (e) { console.error("Failed to parse medications", e); return []; }
+  });
+  const [medLogs, setMedLogs] = useState(() => {
+    try { const savedLogs = localStorage.getItem('medLogs'); return savedLogs ? JSON.parse(savedLogs) : []; }
+    catch (e) { console.error("Failed to parse medLogs", e); return []; }
+  });
+  const [nextDueTimes, setNextDueTimes] = useState(() => {
+    try { const savedNextDueTimes = localStorage.getItem('nextDueTimes'); return savedNextDueTimes ? JSON.parse(savedNextDueTimes) : {}; }
+    catch (e) { console.error("Failed to parse nextDueTimes", e); return {}; }
+  });
+  const [isManageMode, setIsManageMode] = useState(false);
+  const [editingMedication, setEditingMedication] = useState(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [visibleLogCount, setVisibleLogCount] = useState(LOGS_PER_PAGE);
+  // --- End State Initialization ---
+
+  // --- Effects ---
+  useEffect(() => { const timer = setInterval(() => setCurrentTime(new Date()), 10000); return () => clearInterval(timer); }, []);
+  useEffect(() => { localStorage.setItem('medications', JSON.stringify(medications)); }, [medications]);
+  useEffect(() => { localStorage.setItem('medLogs', JSON.stringify(medLogs)); }, [medLogs]);
+  useEffect(() => { localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes)); }, [nextDueTimes]);
+  useEffect(() => { setVisibleLogCount(LOGS_PER_PAGE); }, [medLogs.length]);
+  // --- End Effects ---
+
+  // --- Event Handlers (remain the same) ---
+  const handleTakeMedication = useCallback((med) => {
+    const now = new Date();
+    const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
+    const logEntry = { id: Date.now(), medicationId: med.id, medicationName: med.name, takenAt: now.toISOString(), nextDueAt: nextDue.toISOString() };
+    setMedLogs(prevLogs => [logEntry, ...prevLogs]);
+    setNextDueTimes(prevTimes => ({ ...prevTimes, [med.id]: nextDue.toISOString() }));
+    toast.info("Medication Taken", { description: `${med.name} logged at ${formatTime(now.toISOString())}. Next dose at ${formatTime(nextDue.toISOString())}.` });
+  }, []);
+
+  const handleSaveMedication = useCallback((medData, isEditing) => {
+    if (isEditing) { setMedications(prevMeds => prevMeds.map(m => m.id === medData.id ? medData : m)); }
+    else { setMedications(prevMeds => [...prevMeds, medData]); }
+    setEditingMedication(null);
+  }, []);
+
+   const handleDeleteMedication = useCallback((medIdToDelete) => {
+      const medToDelete = medications.find(med => med.id === medIdToDelete);
+      const medName = medToDelete ? medToDelete.name : 'Medication';
+      setMedications(prevMeds => prevMeds.filter(med => med.id !== medIdToDelete));
+      setNextDueTimes(prevTimes => { const updatedTimes = { ...prevTimes }; delete updatedTimes[medIdToDelete]; return updatedTimes; });
+      toast.error("Medication Deleted", { description: `${medName} has been removed.` });
+   }, [medications]);
+
+  const handleEditMedication = useCallback((med) => { setEditingMedication(med); setIsDialogOpen(true); }, []);
+  const handleAddNewMedication = useCallback(() => { setEditingMedication(null); setIsDialogOpen(true); }, []);
+  const handleDialogChange = useCallback((open) => { setIsDialogOpen(open); if (!open) { setEditingMedication(null); } }, []);
+
+  const handleLoadMoreLogs = useCallback(() => { setVisibleLogCount(prevCount => prevCount + LOGS_PER_PAGE); }, []);
+
+  const handleCopyLog = useCallback(() => {
+      if (medLogs.length === 0) { toast.warning("Log is empty", { description: "There are no medication logs to copy." }); return; }
+      const formattedLog = medLogs.map(log => `${log.medicationName} - Taken: ${formatTime(log.takenAt, true)} - Next Due: ${formatTime(log.nextDueAt, true)}`).join('\n');
+      navigator.clipboard.writeText(formattedLog)
+          .then(() => { toast.success("Log copied to clipboard!"); })
+          .catch(err => { console.error('Failed to copy log: ', err); toast.error("Failed to copy log", { description: "Could not access clipboard." }); });
+  }, [medLogs]);
+
+  const handleExportCSV = useCallback(() => {
+      if (medLogs.length === 0) { toast.warning("Log is empty", { description: "There are no medication logs to export." }); return; }
+      const header = ['Medication Name', 'Taken At (ISO)', 'Next Due At (ISO)'];
+      const rows = medLogs.map(log => [`"${log.medicationName.replace(/"/g, '""')}"`, log.takenAt, log.nextDueAt]);
+      const csvContent = [header.join(','), ...rows.map(row => row.join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement("a");
+      if (link.download !== undefined) {
+          const url = URL.createObjectURL(blob);
+          link.setAttribute("href", url);
+          link.setAttribute("download", `medication_log_${new Date().toISOString().split('T')[0]}.csv`);
+          link.style.visibility = 'hidden';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+          toast.success("Log exported as CSV!");
+      } else { toast.error("Export failed", { description: "CSV export is not supported in your browser." }); }
+  }, [medLogs]);
+  // --- End Event Handlers ---
+
+
+  // --- Render Logic ---
+  const visibleLogs = medLogs.slice(0, visibleLogCount);
+  const canLoadMore = visibleLogCount < medLogs.length;
+
+  return (
+    <>
+      <SonnerToaster position="top-center" richColors /> 
       
-      <div>
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Medication Log</h2>
-          <div className="flex space-x-2">
-            <button
-              onClick={exportCSV}
-              className="bg-green-500 hover:bg-green-600 text-white text-sm py-1 px-3 rounded"
-              disabled={medLogs.length === 0}
-            >
-              Export CSV
-            </button>
-            <button
-              onClick={copyToClipboard}
-              className="bg-purple-500 hover:bg-purple-600 text-white text-sm py-1 px-3 rounded"
-              disabled={medLogs.length === 0}
-            >
-              Copy TSV
-            </button>
-          </div>
-        </div>
+      <div className="max-w-2xl mx-auto p-4 md:p-6 lg:p-8 bg-background min-h-screen font-sans">
         
-        {exportMessage && (
-          <div className="mb-3 bg-green-100 text-green-800 p-2 rounded text-center text-sm">
-            {exportMessage}
+        <header className="mb-8 text-center">
+          <h1 className="text-3xl font-bold tracking-tight text-foreground mb-2 flex items-center justify-center gap-2">
+             <Pill className="text-primary" /> MedTracker
+          </h1>
+          <p className="text-muted-foreground">Your personal medication schedule</p>
+        </header>
+
+        {/* Medication Grid Section */}
+        <section className="mb-8">
+          {/* Header and buttons remain the same */}
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
+            <div className="flex gap-2">
+               <Button variant={isManageMode ? "default" : "outline"} onClick={() => setIsManageMode(!isManageMode)}>
+                 {isManageMode ? <Check size={16} className="mr-2"/> : <Edit size={16} className="mr-2" />}
+                 {isManageMode ? 'Done Managing' : 'Manage'}
+               </Button>
+              {isManageMode && (
+                 <Button variant="outline" onClick={handleAddNewMedication}>
+                   <PlusCircle size={16} className="mr-2" /> Add New
+                 </Button>
+              )}
+            </div>
           </div>
-        )}
+          {/* Grid remains the same */}
+          {medications.length === 0 ? (
+             <Card className="text-center py-8"><CardHeader><CardTitle className="text-muted-foreground">No Medications Added</CardTitle></CardHeader><CardContent><Button onClick={handleAddNewMedication}><PlusCircle size={16} className="mr-2" /> Add Your First Medication</Button></CardContent></Card>
+          ) : (
+             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+               {medications.map((med) => ( <MedicationCard key={med.id} med={med} nextDueTimes={nextDueTimes} currentTime={currentTime} onTake={handleTakeMedication} onEdit={handleEditMedication} isManageMode={isManageMode} onDelete={handleDeleteMedication} /> ))}
+               {!isManageMode && medications.length < 6 && ( <Card className="border-dashed border-2 hover:border-primary transition-colors flex flex-col items-center justify-center min-h-[200px]"><Button variant="ghost" className="text-muted-foreground hover:text-primary h-auto flex-col p-4" onClick={handleAddNewMedication}><PlusCircle size={32} className="mb-2"/> Add Medication</Button></Card> )}
+             </div>
+          )}
+        </section>
+
+        {/* Medication History Section (Log List) */}
+        <section>
+          {/* Header and dropdown remain the same */}
+          <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-foreground">Medication History</h2>
+              <DropdownMenu>
+                  <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={medLogs.length === 0}><MoreHorizontal className="h-4 w-4 mr-2" /> Actions</Button></DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Log Actions</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={handleCopyLog}><ClipboardCopy className="mr-2 h-4 w-4" /><span>Copy Full Log</span></DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleExportCSV}><Download className="mr-2 h-4 w-4" /><span>Export as CSV</span></DropdownMenuItem>
+                  </DropdownMenuContent>
+              </DropdownMenu>
+          </div>
+          {/* Log list rendering remains the same */}
+          {medLogs.length === 0 ? (
+            <Card className="text-center py-6 border-dashed"><CardContent className="flex flex-col items-center justify-center"><Clock size={32} className="text-muted-foreground mb-3"/><p className="text-muted-foreground italic">No doses logged yet.</p></CardContent></Card>
+          ) : (
+            <Card> 
+                <CardContent className="p-0">
+                    <div className="space-y-0 max-h-[400px] overflow-y-auto">
+                        {visibleLogs.map((log, index) => (
+                            <div key={log.id} className={cn( "flex items-center gap-4 p-4 hover:bg-muted/50 transition-colors", index < visibleLogs.length - 1 && "border-b" )}>
+                                <div className={cn("p-2 rounded-full", log.medicationId.includes('codeine') ? 'bg-red-100 dark:bg-red-900/50' : log.medicationId.includes('ibuprofen') ? 'bg-blue-100 dark:bg-blue-900/50' : 'bg-green-100 dark:bg-green-900/50')}>
+                                    <Pill size={16} className={cn(log.medicationId.includes('codeine') ? 'text-red-600 dark:text-red-400' : log.medicationId.includes('ibuprofen') ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400')} />
+                                </div>
+                                <div className="flex-grow"><p className="font-semibold text-foreground">{log.medicationName}</p><p className="text-sm text-muted-foreground">Taken: {formatTime(log.takenAt)}</p></div>
+                                <div className="ml-auto text-right flex-shrink-0 pl-4"><p className="text-base font-medium text-foreground tabular-nums">{formatTime(log.nextDueAt)}</p><p className="text-xs text-muted-foreground">Next Dose</p></div>
+                            </div>
+                        ))}
+                    </div>
+                </CardContent>
+                {medLogs.length > LOGS_PER_PAGE && (
+                    <CardFooter className="pt-4 pb-3 justify-center">
+                        {canLoadMore ? (<Button variant="outline" onClick={handleLoadMoreLogs}><Plus className="mr-2 h-4 w-4" /> Load More ({medLogs.length - visibleLogCount} remaining)</Button>) : (<p className="text-sm text-muted-foreground italic">All {medLogs.length} entries shown.</p>)}
+                    </CardFooter>
+                )}
+            </Card>
+          )}
+        </section>
         
-        {medLogs.length === 0 ? (
-          <p className="text-gray-500 text-center">No medications logged yet</p>
-        ) : (
-          <div className="space-y-3">
-            {medLogs.map((log) => (
-              <div key={log.id} className="bg-white p-3 rounded-md shadow-sm">
-                <div className="font-medium">{log.medicationName}</div>
-                <div className="text-sm">
-                  <span className="text-gray-600">Taken: </span>
-                  {formatTime(log.takenAt)}
-                </div>
-                <div className="text-sm">
-                  <span className="text-gray-600">Next dose: </span>
-                  {formatTime(log.nextDueAt)}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Add/Edit Dialog remains the same */}
+        <AddEditMedicationDialog
+          open={isDialogOpen}
+          onOpenChange={handleDialogChange}
+          medication={editingMedication}
+          onSave={handleSaveMedication}
+          medications={medications}
+        />
       </div>
-      <Analytics />
-    </div>
+    </>
   );
 };
 
