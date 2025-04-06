@@ -6,19 +6,10 @@ import {
 import { toast } from "sonner";
 
 // Import Firebase Auth & Firestore functions and the configured instances
-import { auth, db } from './firebaseConfig'; // Assuming db is exported from firebaseConfig.js
+import { auth, db } from './firebaseConfig';
 import { onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider } from "firebase/auth";
 import {
-    collection, // Reference a collection
-    doc,        // Reference a document
-    onSnapshot, // Listen for real-time updates
-    addDoc,     // Add a new document (auto-ID)
-    setDoc,     // Create or overwrite a document (specific ID)
-    deleteDoc,  // Delete a document
-    query,      // Create a query
-    orderBy,    // Order query results
-    Timestamp   // Firestore Timestamp type
-    // serverTimestamp // Useful for created/updated fields (optional)
+    collection, doc, onSnapshot, addDoc, setDoc, deleteDoc, query, orderBy, Timestamp
 } from "firebase/firestore";
 
 // Import UI Components
@@ -50,13 +41,14 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
 
-  // Application Data State (Now loaded from Firestore)
-  const [medications, setMedications] = useState([]); // Initialize as empty arrays
+  // Application Data State (Loaded from Firestore)
+  // Initialize with empty defaults - REMOVED localStorage.getItem logic
+  const [medications, setMedications] = useState([]);
   const [medLogs, setMedLogs] = useState([]);
-  const [loadingData, setLoadingData] = useState(true); // State to track Firestore loading
+  const [loadingData, setLoadingData] = useState(true);
 
   // Derived State
-  const [nextDueTimes, setNextDueTimes] = useState({}); // Derived from medLogs
+  const [nextDueTimes, setNextDueTimes] = useState({});
 
   // UI State
   const [isManageMode, setIsManageMode] = useState(false);
@@ -75,39 +67,38 @@ const App = () => {
       setLoadingAuth(false);
       console.log("Auth State Changed:", currentUser ? `User ID: ${currentUser.uid}` : "No user");
       if (!currentUser) {
-         // Clear local data on sign out
+         // Clear data on sign out
          setMedications([]);
          setMedLogs([]);
          setNextDueTimes({});
-         setLoadingData(true); // Reset loading state for next login
+         setLoadingData(true); // Reset loading state
          setIsManageMode(false);
          setVisibleLogCount(LOGS_PER_PAGE);
       }
+      // Firestore listeners are handled in the next effect based on 'user'
     });
-    return () => unsubscribeAuth(); // Cleanup auth listener
+    return () => unsubscribeAuth();
   }, []);
 
-  // Listener for Firestore Data Changes (Medications and Logs)
+  // Listener for Firestore Data Changes
   useEffect(() => {
-    // Don't run if user is not logged in
     if (!user) {
-        setLoadingData(false); // Not loading if no user
-        return;
+        setLoadingData(false); // No data to load if no user
+        // Ensure state is clear if somehow populated before logout finished
+        if (medications.length > 0) setMedications([]);
+        if (medLogs.length > 0) setMedLogs([]);
+        if (Object.keys(nextDueTimes).length > 0) setNextDueTimes({});
+        return; // Stop if no user
     }
 
-    setLoadingData(true); // Start loading data for the logged-in user
+    setLoadingData(true);
 
-    // --- Listener for Medications ---
-    // Reference to the user's 'medications' subcollection
+    // Listener for Medications
     const medsCollectionRef = collection(db, 'users', user.uid, 'medications');
     const unsubscribeMeds = onSnapshot(medsCollectionRef, (querySnapshot) => {
-      const userMedications = [];
-      querySnapshot.forEach((doc) => {
-        // Combine document ID and data
-        userMedications.push({ id: doc.id, ...doc.data() });
-      });
-      setMedications(userMedications); // Update state with medications from Firestore
-      setLoadingData(false); // Assume loading finished after first data fetch
+      const userMedications = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMedications(userMedications);
+      setLoadingData(false); // Consider loading complete after first fetch
       console.log("Medications loaded/updated from Firestore");
     }, (error) => {
         console.error("Error fetching medications:", error);
@@ -115,25 +106,20 @@ const App = () => {
         setLoadingData(false);
     });
 
-    // --- Listener for Medication Logs ---
-    // Reference and query for the user's 'medLogs', ordered by takenAt descending
+    // Listener for Medication Logs
     const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
-    const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc")); // Order newest first
+    const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc"));
     const unsubscribeLogs = onSnapshot(logsQuery, (querySnapshot) => {
-      const userLogs = [];
-      querySnapshot.forEach((doc) => {
+      const userLogs = querySnapshot.docs.map(doc => {
         const data = doc.data();
-        // Convert Firestore Timestamps back to ISO strings for consistency
-        // with existing components (or update components to handle Dates/Timestamps)
-        userLogs.push({
-            id: doc.id,
-            ...data,
-            takenAt: data.takenAt?.toDate().toISOString(), // Use optional chaining and convert
+        return {
+            id: doc.id, ...data,
+            takenAt: data.takenAt?.toDate().toISOString(),
             nextDueAt: data.nextDueAt?.toDate().toISOString()
-        });
+        };
       });
-      setMedLogs(userLogs); // Update state with logs from Firestore
-      setLoadingData(false); // Assume loading finished
+      setMedLogs(userLogs);
+      setLoadingData(false); // Consider loading complete
       console.log("Logs loaded/updated from Firestore");
     }, (error) => {
         console.error("Error fetching logs:", error);
@@ -141,148 +127,89 @@ const App = () => {
         setLoadingData(false);
     });
 
-    // Cleanup listeners on component unmount or when user changes
+    // Cleanup listeners
     return () => {
       unsubscribeMeds();
       unsubscribeLogs();
     };
-  }, [user]); // Re-run this effect when the user changes
+  }, [user]); // Re-run when user changes
 
-  // Effect to derive nextDueTimes whenever medLogs change
+  // Effect to derive nextDueTimes from medLogs
   useEffect(() => {
-    if (medLogs.length === 0) {
-      setNextDueTimes({});
-      return;
-    }
-
+    if (medLogs.length === 0) { setNextDueTimes({}); return; }
     const latestDueTimes = {};
-    // Since logs are ordered descending by takenAt, the first entry for each med ID is the latest
     medLogs.forEach(log => {
       if (!latestDueTimes[log.medicationId] && log.nextDueAt) {
-        latestDueTimes[log.medicationId] = log.nextDueAt; // Store ISO string
+        latestDueTimes[log.medicationId] = log.nextDueAt;
       }
     });
     setNextDueTimes(latestDueTimes);
     console.log("Derived nextDueTimes");
+  }, [medLogs]);
 
-  }, [medLogs]); // Re-run when logs update
-
-  // Update current time periodically (no change)
+  // Update current time periodically
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 10000);
     return () => clearInterval(timer);
   }, []);
 
-  // Reset pagination when logs change (no change)
+  // Reset pagination when logs change
   useEffect(() => { setVisibleLogCount(LOGS_PER_PAGE); }, [medLogs.length]);
 
-  // *** REMOVED useEffect hooks for localStorage ***
+  // *** REMOVED useEffect hooks for localStorage.setItem ***
 
   // --- End Effects ---
 
-  // --- Authentication Handlers (no change) ---
-  const handleSignIn = useCallback(async () => { /* ... */ }, []);
-  const handleSignOut = useCallback(async () => { /* ... */ }, []);
+  // --- Authentication Handlers (no change needed) ---
+  const handleSignIn = useCallback(async () => {
+      const provider = new GoogleAuthProvider();
+      try { setLoadingAuth(true); await signInWithPopup(auth, provider); toast.success("Signed in successfully!"); }
+      catch (error) { console.error("Sign-in error:", error); toast.error("Sign-in failed", { description: error.message }); setLoadingAuth(false); }
+  }, []);
+  const handleSignOut = useCallback(async () => {
+      try { await signOut(auth); toast.info("Signed out."); }
+      catch (error) { console.error("Sign-out error:", error); toast.error("Sign-out failed", { description: error.message }); }
+  }, []);
   // --- End Authentication Handlers ---
 
-
-  // --- Core Logic Handlers (MODIFIED for Firestore) ---
-
-  // Handle taking a medication - Write to Firestore
+  // --- Core Logic Handlers (Write to Firestore - no change needed from previous step) ---
   const handleTakeMedication = useCallback(async (med) => {
-    if (!user) { toast.error("Please sign in to track medications."); return; }
+      if (!user) { toast.error("Please sign in."); return; }
+      const now = new Date(); const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
+      const logEntry = { medicationId: med.id, medicationName: med.name, takenAt: Timestamp.fromDate(now), nextDueAt: Timestamp.fromDate(nextDue) };
+      try { const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs'); await addDoc(logsCollectionRef, logEntry); toast.info("Medication Taken", { description: `${med.name} logged.` }); }
+      catch (error) { console.error("Error logging med:", error); toast.error("Failed to log med", { description: error.message }); }
+  }, [user]);
 
-    const now = new Date();
-    const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-
-    // Prepare log entry with Firestore Timestamps
-    const logEntry = {
-      medicationId: med.id,
-      medicationName: med.name, // Store name for easier log display
-      takenAt: Timestamp.fromDate(now), // Use Firestore Timestamp
-      nextDueAt: Timestamp.fromDate(nextDue) // Use Firestore Timestamp
-    };
-
-    try {
-      // Reference to the user's 'medLogs' subcollection
-      const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
-      // Add the new log document (Firestore auto-generates ID)
-      await addDoc(logsCollectionRef, logEntry);
-      toast.info("Medication Taken", { description: `${med.name} logged successfully.` });
-      // State update (medLogs, nextDueTimes) will happen via the onSnapshot listener
-    } catch (error) {
-      console.error("Error logging medication:", error);
-      toast.error("Failed to log medication", { description: error.message });
-    }
-  }, [user]); // Depends on user
-
-  // Handle saving (add/edit) a medication - Write to Firestore
   const handleSaveMedication = useCallback(async (medData, isEditing) => {
-    if (!user) { toast.error("Please sign in to manage medications."); return; }
+      if (!user) { toast.error("Please sign in."); return; }
+      const medDocRef = doc(db, 'users', user.uid, 'medications', medData.id);
+      const dataToSave = { name: medData.name, interval: medData.interval };
+      try { await setDoc(medDocRef, dataToSave); /* Toast handled in dialog */ }
+      catch (error) { console.error("Error saving med:", error); toast.error(`Failed to ${isEditing ? 'update' : 'add'} med`, { description: error.message }); }
+  }, [user]);
 
-    // Reference to the specific medication document using its ID
-    // NOTE: We decided in Step 4 to use medData.id as the document ID
-    const medDocRef = doc(db, 'users', user.uid, 'medications', medData.id);
-
-    // Data to save (excluding the ID, which is the document key)
-    const dataToSave = {
-        name: medData.name,
-        interval: medData.interval
-    };
-
-    try {
-      // Use setDoc to create (if new) or overwrite (if editing) the document
-      // Using merge: true option with setDoc could also work for updates
-      await setDoc(medDocRef, dataToSave);
-      // Toast is handled within the Dialog component upon successful save trigger
-      // State update (medications) will happen via the onSnapshot listener
-    } catch (error) {
-      console.error("Error saving medication:", error);
-      // Show error toast here as the dialog might close before its own toast shows
-      toast.error(`Failed to ${isEditing ? 'update' : 'add'} medication`, { description: error.message });
-      // Re-throw or handle so the dialog knows saving failed? For now, just toast.
-    }
-    // No need to call setEditingMedication(null) here, dialog handles closing
-  }, [user]); // Depends on user
-
-  // Handle deleting a medication - Delete from Firestore
   const handleDeleteMedication = useCallback(async (medIdToDelete) => {
-    if (!user) { toast.error("Please sign in to manage medications."); return; }
+      if (!user) { toast.error("Please sign in."); return; }
+      const medToDelete = medications.find(med => med.id === medIdToDelete); const medName = medToDelete ? medToDelete.name : 'Medication';
+      const medDocRef = doc(db, 'users', user.uid, 'medications', medIdToDelete);
+      try { await deleteDoc(medDocRef); toast.error("Medication Deleted", { description: `${medName} removed.` }); }
+      catch (error) { console.error("Error deleting med:", error); toast.error("Failed to delete med", { description: error.message }); }
+  }, [user, medications]);
 
-    // Find name for toast before potential state update
-    const medToDelete = medications.find(med => med.id === medIdToDelete);
-    const medName = medToDelete ? medToDelete.name : 'Medication';
-
-    // Reference to the medication document
-    const medDocRef = doc(db, 'users', user.uid, 'medications', medIdToDelete);
-
-    try {
-      // Delete the document from Firestore
-      await deleteDoc(medDocRef);
-      toast.error("Medication Deleted", { description: `${medName} has been removed.` });
-      // State update (medications) will happen via the onSnapshot listener
-      // Note: Associated logs are NOT deleted automatically. Handle if needed.
-    } catch (error) {
-        console.error("Error deleting medication:", error);
-        toast.error("Failed to delete medication", { description: error.message });
-    }
-  }, [user, medications]); // Depends on user and medications (to get name)
-
-  // --- UI Control Handlers (no change) ---
+  // --- UI Control Handlers (no change needed) ---
   const handleEditMedication = useCallback((med) => { setEditingMedication(med); setIsDialogOpen(true); }, []);
   const handleAddNewMedication = useCallback(() => { setEditingMedication(null); setIsDialogOpen(true); }, []);
   const handleDialogChange = useCallback((open) => { setIsDialogOpen(open); if (!open) { setEditingMedication(null); } }, []);
   const handleLoadMoreLogs = useCallback(() => { setVisibleLogCount(prevCount => prevCount + LOGS_PER_PAGE); }, []);
 
-  // --- Log Action Handlers (Operate on local state derived from Firestore) ---
-  const handleCopyLog = useCallback(() => { /* ... no change needed ... */ }, [medLogs]);
-  const handleExportCSV = useCallback(() => { /* ... no change needed ... */ }, [medLogs]);
+  // --- Log Action Handlers (no change needed) ---
+  const handleCopyLog = useCallback(() => { /* ... */ }, [medLogs]);
+  const handleExportCSV = useCallback(() => { /* ... */ }, [medLogs]);
   // --- End Handlers ---
 
   // --- Render Logic ---
-
-  // Display loading indicator while checking authentication OR loading initial data
-  if (loadingAuth || (user && loadingData)) {
+  if (loadingAuth || (user && loadingData && medLogs.length === 0 && medications.length === 0)) { // Refined loading condition
     return (
       <div className="flex justify-center items-center min-h-screen text-muted-foreground">
         {loadingAuth ? "Authenticating..." : "Loading Medication Data..."}
@@ -293,29 +220,21 @@ const App = () => {
   return (
     <>
       <SonnerToaster position="top-center" richColors />
-
       <div className="max-w-4xl mx-auto p-4 md:p-6 lg:p-8 bg-background min-h-screen font-sans">
-
         {/* Header */}
         <header className="mb-6 pb-4 border-b flex justify-between items-center gap-4">
-          {/* ... header content ... */}
-           <div className="flex-1"></div>
-           <div className="text-center">
-             <h1 className="text-3xl font-bold tracking-tight text-foreground mb-2 flex items-center justify-center gap-2">
-               <Pill className="text-primary" /> MedTracker
-             </h1>
-             <p className="text-muted-foreground text-sm">
-                 {user ? `Tracking for ${user.displayName || 'User'}` : 'Your personal medication schedule'}
-             </p>
-           </div>
-           <div className="flex-1 flex justify-end">
+          <div className="flex-1"></div>
+          <div className="text-center">
+             <h1 className="text-3xl font-bold tracking-tight text-foreground mb-2 flex items-center justify-center gap-2"><Pill className="text-primary" /> MedTracker</h1>
+             <p className="text-muted-foreground text-sm">{user ? `Tracking for ${user.displayName || 'User'}` : 'Your personal medication schedule'}</p>
+          </div>
+          <div className="flex-1 flex justify-end">
              {user && (<Button variant="outline" size="sm" onClick={handleSignOut}>Sign Out</Button>)}
-           </div>
+          </div>
         </header>
 
         {/* Conditional Content: Sign-In or Main App */}
         {!user ? (
-          // Sign-In Prompt
           <div className="text-center py-10">
              <h2 className="text-xl font-semibold mb-4">Welcome to MedTracker</h2>
              <p className="text-muted-foreground mb-6">Sign in with Google to save and sync your medication schedule.</p>
@@ -342,7 +261,6 @@ const App = () => {
                     {isManageMode && (<Button variant="outline" onClick={handleAddNewMedication}><PlusCircle size={16} className="mr-2" /> Add New</Button>)}
                   </div>
                 </div>
-                {/* Pass Firestore-synced state and handlers */}
                 <MedicationGrid
                   medications={medications} nextDueTimes={nextDueTimes} currentTime={currentTime}
                   handleTakeMedication={handleTakeMedication} handleEditMedication={handleEditMedication}
@@ -362,7 +280,6 @@ const App = () => {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
-                 {/* Pass Firestore-synced state and handlers */}
                 <LogList
                   medLogs={medLogs} visibleLogCount={visibleLogCount}
                   handleLoadMoreLogs={handleLoadMoreLogs} logsPerPage={LOGS_PER_PAGE}
@@ -372,7 +289,6 @@ const App = () => {
 
             {/* Calendar Content */}
             <TabsContent value="calendar">
-               {/* Pass Firestore-synced state */}
                <MedicationCalendarView medLogs={medLogs} />
             </TabsContent>
           </Tabs>
@@ -384,8 +300,8 @@ const App = () => {
                open={isDialogOpen}
                onOpenChange={handleDialogChange}
                medication={editingMedication}
-               onSave={handleSaveMedication} // Uses Firestore write
-               medications={medications} // Pass current meds for validation
+               onSave={handleSaveMedication}
+               medications={medications}
              />
         )}
       </div>
