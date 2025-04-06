@@ -251,13 +251,25 @@ const App = () => {
       <SonnerToaster position="top-center" richColors />
       <div className="max-w-4xl mx-auto p-4 md:p-6 lg:p-8 bg-background min-h-screen font-sans">
         {/* Header */}
-        <header className="mb-6 pb-4 border-b flex justify-between items-center gap-4">
-           <div className="flex-1 flex justify-start">{notificationButton}</div>
-           <div className="text-center">
-             <h1 className="text-3xl font-bold tracking-tight text-foreground mb-2 flex items-center justify-center gap-2"><Pill className="text-primary" /> MedTracker</h1>
-             <p className="text-muted-foreground text-sm">{user ? `Tracking for ${user.displayName || 'User'}` : 'Your personal medication schedule'}</p>
-           </div>
-           <div className="flex-1 flex justify-end">{user && (<Button variant="outline" size="sm" onClick={handleSignOut}>Sign Out</Button>)}</div>
+        <header className="mb-6 pb-4 border-b flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="flex-1 flex justify-start order-2 md:order-1">
+            {notificationButton}
+          </div>
+          <div className="text-center order-1 md:order-2">
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground mb-2 flex items-center justify-center gap-2">
+              <Pill className="text-primary" /> MedTracker
+            </h1>
+            <p className="text-muted-foreground text-sm">
+              {user ? `Tracking for ${user.displayName || 'User'}` : 'Your personal medication schedule'}
+            </p>
+          </div>
+          <div className="flex-1 flex justify-end order-3">
+            {user && (
+              <Button variant="outline" size="sm" onClick={handleSignOut}>
+                Sign Out
+              </Button>
+            )}
+          </div>
         </header>
 
         {/* Conditional Content: Sign-In or Main App */}
