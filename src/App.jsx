@@ -1,60 +1,297 @@
-import React, { useState, useEffect } from 'react';
-import { PlusCircle, X, Edit, Check, Clock } from "lucide-react";
+import React, { useState, useEffect, useCallback } from 'react';
+import { PlusCircle, X, Edit, Check, Trash2, Pill } from "lucide-react";
+import { cn } from "@/lib/utils"; // [cite: 17]
 
+// --- Shadcn/ui Components ---
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogClose,
+} from "@/components/ui/dialog";
+
+// --- Sonner Toast Components ---
+import { Toaster as SonnerToaster, toast } from "sonner"; // Import toast function from sonner
+// --- End Sonner Toast Components ---
+
+// --- Helper Functions ---
+const formatTime = (dateString) => {
+  if (!dateString) return '--:--';
+  const date = new Date(dateString);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+};
+
+const calculateTimeInfo = (dueTimeString, intervalHours, currentTime) => {
+  if (!dueTimeString) return { hours: 0, minutes: 0, isOverdue: false, progress: 0, takenAt: null };
+
+  const dueTime = new Date(dueTimeString);
+  const intervalMillis = intervalHours * 60 * 60 * 1000;
+  const takenTime = new Date(dueTime.getTime() - intervalMillis);
+  const totalDuration = intervalMillis;
+  const elapsed = currentTime.getTime() - takenTime.getTime();
+  const diff = dueTime.getTime() - currentTime.getTime();
+
+  if (diff <= 0) {
+    return { hours: 0, minutes: 0, isOverdue: true, progress: 100, takenAt: takenTime };
+  }
+
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
+
+  return { hours, minutes, isOverdue: false, progress, takenAt: takenTime };
+};
+// --- End Helper Functions ---
+
+// --- Child Components ---
+
+// Medication Card Component (No changes needed for toast)
+const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onEdit, isManageMode, onDelete }) => {
+  const timeInfo = calculateTimeInfo(nextDueTimes[med.id], med.interval, currentTime);
+
+  const getProgressColorClass = () => {
+    if (timeInfo.isOverdue) return "stroke-destructive";
+    if (!nextDueTimes[med.id]) return "stroke-muted";
+    if (timeInfo.progress < 30) return "stroke-[--chart-2]";
+    if (timeInfo.progress < 70) return "stroke-[--chart-5]";
+    return "stroke-[--chart-1]";
+  };
+
+  const progressColorClass = getProgressColorClass();
+
+  return (
+    <Card className="relative overflow-hidden transition-all hover:shadow-md flex flex-col h-full">
+      {/* Circular Progress SVG */}
+      <svg className="absolute top-0 left-0 w-full h-full -rotate-90 opacity-20 pointer-events-none" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="45" fill="transparent" className="stroke-border" strokeWidth="6" />
+        {nextDueTimes[med.id] && (
+          <circle
+            cx="50"
+            cy="50"
+            r="45"
+            fill="transparent"
+            className={cn(progressColorClass, "transition-all duration-500 ease-linear")}
+            strokeWidth="6"
+            strokeLinecap="round"
+            strokeDasharray="283"
+            strokeDashoffset={283 - (283 * timeInfo.progress / 100)}
+          />
+        )}
+      </svg>
+
+      <CardHeader className="relative z-10 pb-2">
+        <CardTitle className="flex items-center justify-between">
+          <span className="truncate">{med.name}</span>
+          {isManageMode && (
+            <div className="flex items-center space-x-1">
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary" onClick={() => onEdit(med)}>
+                <Edit size={16} />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onDelete(med.id)}>
+                <Trash2 size={16} />
+              </Button>
+            </div>
+          )}
+        </CardTitle>
+        <CardDescription>Every {med.interval} hours</CardDescription>
+      </CardHeader>
+      <CardContent className="relative z-10 flex-grow flex flex-col items-center justify-center text-center pb-4">
+        {timeInfo.isOverdue ? (
+          <span className="text-destructive font-bold text-lg animate-pulse">TAKE NOW</span>
+        ) : nextDueTimes[med.id] ? (
+          <div className="text-center">
+            <div className="text-2xl font-semibold tabular-nums">
+              {timeInfo.hours}h {timeInfo.minutes}m
+            </div>
+            <div className="text-xs text-muted-foreground">
+              until next dose at {formatTime(nextDueTimes[med.id])}
+            </div>
+          </div>
+        ) : (
+          <span className="text-muted-foreground italic">Ready to take first dose</span>
+        )}
+      </CardContent>
+      <CardFooter className="relative z-10 pt-0">
+        <Button
+          onClick={() => onTake(med)}
+          className="w-full"
+          variant={timeInfo.isOverdue ? "destructive" : "default"}
+          disabled={isManageMode}
+        >
+          <Check size={16} className="mr-2" />
+          Take {med.name}
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+});
+
+// Add/Edit Medication Dialog Component (Updated to use Sonner toast)
+const AddEditMedicationDialog = ({ open, onOpenChange, medication, onSave, medications }) => {
+  const [name, setName] = useState('');
+  const [interval, setIntervalValue] = useState(8);
+  const [error, setError] = useState('');
+  // No need for useToast hook anymore
+  const isEditing = medication !== null;
+
+  useEffect(() => {
+    if (medication) {
+      setName(medication.name);
+      setIntervalValue(medication.interval);
+      setError('');
+    } else {
+      setName('');
+      setIntervalValue(8);
+      setError('');
+    }
+  }, [medication, open]);
+
+  const handleSave = () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError('Medication name cannot be empty.');
+      return;
+    }
+    if (!interval || interval < 1 || interval > 72) {
+        setError('Interval must be between 1 and 72 hours.');
+        return;
+    }
+
+    const existingMed = medications.find(m => m.name.toLowerCase() === trimmedName.toLowerCase());
+    if (existingMed && (!isEditing || existingMed.id !== medication.id)) {
+        setError('A medication with this name already exists.');
+        return;
+    }
+
+    const medData = {
+      id: isEditing ? medication.id : trimmedName.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(),
+      name: trimmedName,
+      interval: parseInt(interval, 10),
+    };
+
+    onSave(medData, isEditing);
+    // Use Sonner's toast function
+    toast.success(`Medication ${isEditing ? 'updated' : 'added'}`, {
+        description: `${medData.name} (every ${medData.interval} hours) has been saved.`,
+    });
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>{isEditing ? 'Edit Medication' : 'Add New Medication'}</DialogTitle>
+          <DialogDescription>
+            {isEditing ? `Update the details for ${medication?.name}.` : 'Enter the details for the new medication.'}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-4">
+          {/* Input fields remain the same */}
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="name" className="text-right">
+              Name
+            </Label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(e) => { setName(e.target.value); setError(''); }}
+              className="col-span-3"
+              placeholder="e.g., Ibuprofen"
+            />
+          </div>
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="interval" className="text-right">
+              Interval (hrs)
+            </Label>
+            <Input
+              id="interval"
+              type="number"
+              value={interval}
+              onChange={(e) => { setIntervalValue(parseInt(e.target.value) || 1); setError(''); }}
+              className="col-span-3"
+              min="1"
+              max="72"
+            />
+          </div>
+          {error && <p className="col-span-4 text-sm text-destructive text-center">{error}</p>}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="outline">Cancel</Button>
+          </DialogClose>
+          <Button type="button" onClick={handleSave}>Save Changes</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// --- Main App Component ---
 const MedicationTracker = () => {
-  // Initialize medications from localStorage
+  // No useToast hook needed here
+
+  // --- State Initialization (remains the same) ---
   const [medications, setMedications] = useState(() => {
-    const savedMeds = localStorage.getItem('medications');
-    return savedMeds ? JSON.parse(savedMeds) : [
-      { id: 'codeine', name: 'Codeine', interval: 6 },
-      { id: 'ibuprofen', name: 'Ibuprofen', interval: 8 },
-      { id: 'augmentin', name: 'Augmentin', interval: 8 },
-    ];
+    try {
+      const savedMeds = localStorage.getItem('medications');
+      return savedMeds ? JSON.parse(savedMeds) : [
+        { id: 'codeine-1', name: 'Codeine', interval: 6 },
+        { id: 'ibuprofen-2', name: 'Ibuprofen', interval: 8 },
+        { id: 'augmentin-3', name: 'Augmentin', interval: 8 },
+      ];
+    } catch (e) { console.error("Failed to parse medications", e); return []; }
   });
 
-  const [isEditing, setIsEditing] = useState(false);
-  const [newMedication, setNewMedication] = useState({ name: '', interval: 8 });
-  const [editingMedication, setEditingMedication] = useState(null);
   const [medLogs, setMedLogs] = useState(() => {
-    const savedLogs = localStorage.getItem('medLogs');
-    return savedLogs ? JSON.parse(savedLogs) : [];
+    try {
+      const savedLogs = localStorage.getItem('medLogs');
+      return savedLogs ? JSON.parse(savedLogs) : [];
+    } catch (e) { console.error("Failed to parse medLogs", e); return []; }
   });
+
   const [nextDueTimes, setNextDueTimes] = useState(() => {
-    const savedNextDueTimes = localStorage.getItem('nextDueTimes');
-    return savedNextDueTimes ? JSON.parse(savedNextDueTimes) : {};
+    try {
+      const savedNextDueTimes = localStorage.getItem('nextDueTimes');
+      return savedNextDueTimes ? JSON.parse(savedNextDueTimes) : {};
+    } catch (e) { console.error("Failed to parse nextDueTimes", e); return {}; }
   });
+
+  const [isManageMode, setIsManageMode] = useState(false);
+  const [editingMedication, setEditingMedication] = useState(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [exportMessage, setExportMessage] = useState('');
+  // --- End State Initialization ---
 
-  // Save medications to localStorage when they change
+  // --- Effects (remain the same) ---
   useEffect(() => {
-    localStorage.setItem('medications', JSON.stringify(medications));
-  }, [medications]);
-
-  // Update current time every minute
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 10000); // Update every 10 seconds for smoother progress
-    
+    const timer = setInterval(() => setCurrentTime(new Date()), 10000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => { localStorage.setItem('medications', JSON.stringify(medications)); }, [medications]);
+  useEffect(() => { localStorage.setItem('medLogs', JSON.stringify(medLogs)); }, [medLogs]);
+  useEffect(() => { localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes)); }, [nextDueTimes]);
+  // --- End Effects ---
 
-  // Save data to localStorage whenever it changes
-  useEffect(() => {
-    localStorage.setItem('medLogs', JSON.stringify(medLogs));
-  }, [medLogs]);
-
-  useEffect(() => {
-    localStorage.setItem('nextDueTimes', JSON.stringify(nextDueTimes));
-  }, [nextDueTimes]);
-
-  // Function to handle taking medication
-  const takeMedication = (med) => {
+  // --- Event Handlers (Updated to use Sonner toast) ---
+  const handleTakeMedication = useCallback((med) => {
     const now = new Date();
     const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-    
-    // Create a log entry
+
     const logEntry = {
       id: Date.now(),
       medicationId: med.id,
@@ -62,329 +299,181 @@ const MedicationTracker = () => {
       takenAt: now.toISOString(),
       nextDueAt: nextDue.toISOString()
     };
-    
-    // Update state
-    setMedLogs([logEntry, ...medLogs]);
-    setNextDueTimes({
-      ...nextDueTimes,
-      [med.id]: nextDue.toISOString()
+
+    setMedLogs(prevLogs => [logEntry, ...prevLogs]);
+    setNextDueTimes(prevTimes => ({ ...prevTimes, [med.id]: nextDue.toISOString() }));
+
+    // Use Sonner's toast function
+    toast.info("Medication Taken", { // Using info style
+      description: `${med.name} logged at ${formatTime(now.toISOString())}. Next dose at ${formatTime(nextDue.toISOString())}.`,
     });
-  };
+  }, []); // Removed toast hook dependency
 
-  // Function to calculate time remaining and progress
-  const getTimeRemaining = (dueTimeString, interval) => {
-    if (!dueTimeString) return { hours: 0, minutes: 0, isOverdue: false, progress: 0 };
-    
-    const dueTime = new Date(dueTimeString);
-    const takenTime = new Date(dueTime - interval * 60 * 60 * 1000);
-    const totalDuration = interval * 60 * 60 * 1000;
-    const elapsed = currentTime - takenTime;
-    const diff = dueTime - currentTime;
-    
-    if (diff <= 0) {
-      return { hours: 0, minutes: 0, isOverdue: true, progress: 100 };
+  const handleSaveMedication = useCallback((medData, isEditing) => {
+    if (isEditing) {
+      setMedications(prevMeds => prevMeds.map(m => m.id === medData.id ? medData : m));
+    } else {
+      setMedications(prevMeds => [...prevMeds, medData]);
     }
-    
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-    const progress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
-    
-    return { hours, minutes, isOverdue: false, progress };
-  };
-
-  const addMedication = () => {
-    if (!newMedication.name.trim()) {
-      setExportMessage('Please enter a medication name');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
-
-    const id = newMedication.name.toLowerCase().replace(/\s+/g, '-');
-    
-    if (medications.some(med => med.name.toLowerCase() === newMedication.name.toLowerCase())) {
-      setExportMessage('A medication with this name already exists');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
-    
-    const newMed = {
-      id,
-      name: newMedication.name,
-      interval: parseInt(newMedication.interval, 10) || 8
-    };
-    
-    setMedications([...medications, newMed]);
-    setNewMedication({ name: '', interval: 8 });
-    setIsEditing(false);
-  };
-
-  const startEditMedication = (med) => {
-    setEditingMedication({ ...med });
-  };
-
-  const saveEditedMedication = () => {
-    if (!editingMedication.name.trim()) {
-      setExportMessage('Medication name cannot be empty');
-      setTimeout(() => setExportMessage(''), 3000);
-      return;
-    }
-
-    setMedications(medications.map(med => 
-      med.id === editingMedication.id ? editingMedication : med
-    ));
     setEditingMedication(null);
-  };
+    // Toast is now called inside AddEditMedicationDialog
+  }, []);
 
-  const deleteMedication = (medId) => {
-    setMedications(medications.filter(med => med.id !== medId));
-    
-    const updatedNextDueTimes = { ...nextDueTimes };
-    delete updatedNextDueTimes[medId];
-    setNextDueTimes(updatedNextDueTimes);
-  };
+   const handleDeleteMedication = useCallback((medIdToDelete) => {
+      const medToDelete = medications.find(med => med.id === medIdToDelete);
+      const medName = medToDelete ? medToDelete.name : 'Medication';
 
-  // Format time for display
-  const formatTime = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+      setMedications(prevMeds => prevMeds.filter(med => med.id !== medIdToDelete));
+      setNextDueTimes(prevTimes => {
+        const updatedTimes = { ...prevTimes };
+        delete updatedTimes[medIdToDelete];
+        return updatedTimes;
+      });
+
+      // Use Sonner's toast function (error style)
+      toast.error("Medication Deleted", { // Using error style
+        description: `${medName} has been removed.`,
+      });
+   }, [medications]); // Removed toast hook dependency
+
+
+  const handleEditMedication = useCallback((med) => {
+    setEditingMedication(med);
+    setIsDialogOpen(true);
+  }, []);
+
+  const handleAddNewMedication = useCallback(() => {
+    setEditingMedication(null);
+    setIsDialogOpen(true);
+  }, []);
+
+  const handleDialogChange = useCallback((open) => {
+    setIsDialogOpen(open);
+    if (!open) {
+      setEditingMedication(null);
+    }
+  }, []);
+  // --- End Event Handlers ---
+
+
+  // --- Render Logic ---
+  const lastThreeLogs = medLogs.slice(0, 3);
 
   return (
-    <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-center mb-6">Medication Tracker</h1>
-        
-        {/* Medication Management UI */}
-        <div className="mb-6">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="text-lg font-semibold">Your Medications</h2>
-            <button 
-              onClick={() => setIsEditing(!isEditing)}
-              className="text-blue-500 flex items-center text-sm"
-            >
-              {isEditing ? 'Done' : 'Manage'}
-            </button>
-          </div>
-          
-          {/* Medication cards */}
-          <div className="grid grid-cols-2 gap-4">
-            {medications.map((med) => {
-              const timeInfo = getTimeRemaining(nextDueTimes[med.id], med.interval);
-              const progressColor = timeInfo.isOverdue 
-                ? "stroke-red-500" 
-                : timeInfo.progress < 30 ? "stroke-green-500" 
-                : timeInfo.progress < 70 ? "stroke-yellow-500" 
-                : "stroke-orange-500";
-              
-              return (
-                <div key={med.id} className="flex flex-col">
-                  {isEditing ? (
-                    // Edit mode
-                    <div className="border border-gray-300 rounded-lg p-2 bg-white h-full flex flex-col">
-                      {editingMedication && editingMedication.id === med.id ? (
-                        // Editing this specific medication
-                        <>
-                          <input
-                            type="text"
-                            value={editingMedication.name}
-                            onChange={(e) => setEditingMedication({...editingMedication, name: e.target.value})}
-                            className="border border-gray-300 rounded p-1 mb-1 text-sm"
-                            placeholder="Medication name"
-                          />
-                          <div className="flex items-center mb-1">
-                            <label className="text-xs mr-1">Hours:</label>
-                            <input
-                              type="number"
-                              value={editingMedication.interval}
-                              onChange={(e) => setEditingMedication({...editingMedication, interval: parseInt(e.target.value) || 1})}
-                              className="border border-gray-300 rounded p-1 w-full text-sm"
-                              min="1"
-                              max="72"
-                            />
-                          </div>
-                          <div className="flex justify-between mt-auto pt-1">
-                            <button 
-                              onClick={() => setEditingMedication(null)}
-                              className="p-1 text-gray-500 rounded"
-                            >
-                              <X size={16} />
-                            </button>
-                            <button 
-                              onClick={saveEditedMedication}
-                              className="p-1 text-green-500 rounded"
-                            >
-                              <Check size={16} />
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        // Display with edit/delete options
-                        <>
-                          <div className="font-medium mb-1 truncate">{med.name}</div>
-                          <div className="text-xs text-gray-500 mb-1">Every {med.interval} hours</div>
-                          <div className="flex justify-between mt-auto pt-1">
-                            <button 
-                              onClick={() => deleteMedication(med.id)}
-                              className="p-1 text-red-500 rounded"
-                            >
-                              <X size={16} />
-                            </button>
-                            <button 
-                              onClick={() => startEditMedication(med)}
-                              className="p-1 text-blue-500 rounded"
-                            >
-                              <Edit size={16} />
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    // Normal mode with circular progress indicator
-                    <div className="relative">
-                      {/* Circular progress background */}
-                      <svg className="absolute top-0 left-0 w-full h-full -rotate-90" viewBox="0 0 100 100">
-                        <circle
-                          cx="50"
-                          cy="50"
-                          r="42"
-                          fill="transparent"
-                          stroke="#e5e7eb"
-                          strokeWidth="8"
-                        />
-                        {nextDueTimes[med.id] && (
-                          <circle
-                            cx="50"
-                            cy="50"
-                            r="42"
-                            fill="transparent"
-                            className={progressColor}
-                            strokeWidth="8"
-                            strokeLinecap="round"
-                            strokeDasharray="264"
-                            strokeDashoffset={264 - (264 * timeInfo.progress / 100)}
-                          />
-                        )}
-                      </svg>
-                      
-                      {/* Button inside circle */}
-                      <button
-                        onClick={() => takeMedication(med)}
-                        className="relative w-full h-32 bg-white rounded-full flex flex-col items-center justify-center border-2 shadow-sm overflow-hidden"
-                      >
-                        <span className="font-bold text-lg">{med.name}</span>
-                        
-                        {timeInfo.isOverdue ? (
-                          <span className="text-red-600 font-bold text-sm">TAKE NOW</span>
-                        ) : nextDueTimes[med.id] ? (
-                          <div className="mt-2 text-center text-sm flex items-center justify-center">
-                            <Clock size={14} className="mr-1" />
-                            <span>
-                              {timeInfo.hours}h {timeInfo.minutes}m
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="mt-1 text-sm text-gray-500">Not taken yet</span>
-                        )}
-                        
-                        <span className="text-xs text-gray-400 mt-1">
-                          Every {med.interval}h
-                        </span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            
-            {/* Add new medication button/form */}
-            {isEditing && (
-              <div className="border border-gray-300 border-dashed rounded-lg p-2 flex flex-col items-center justify-center bg-white h-32">
-                {newMedication.name || newMedication.interval !== 8 ? (
-                  // Show form if user has started entering data
-                  <div className="w-full">
-                    <input
-                      type="text"
-                      value={newMedication.name}
-                      onChange={(e) => setNewMedication({...newMedication, name: e.target.value})}
-                      className="border border-gray-300 rounded p-1 mb-1 w-full text-sm"
-                      placeholder="Medication name"
-                    />
-                    <div className="flex items-center mb-2">
-                      <label className="text-xs mr-1">Hours:</label>
-                      <input
-                        type="number"
-                        value={newMedication.interval}
-                        onChange={(e) => setNewMedication({...newMedication, interval: parseInt(e.target.value) || 1})}
-                        className="border border-gray-300 rounded p-1 w-full text-sm"
-                        min="1"
-                        max="72"
-                      />
-                    </div>
-                    <div className="flex justify-end">
-                      <button 
-                        onClick={addMedication}
-                        className="bg-green-500 hover:bg-green-600 text-white text-xs py-1 px-2 rounded"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  // Show just the add button initially
-                  <button 
-                    onClick={() => setNewMedication({name: '', interval: 8})}
-                    className="flex flex-col items-center text-blue-500"
-                  >
-                    <PlusCircle size={24} />
-                    <span className="text-xs mt-1">Add Medication</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+    <>
+      {/* Add SonnerToaster component here */}
+      <SonnerToaster position="top-center" richColors /> 
       
-      {/* Simplified Medication Log */}
-      <div>
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Recent Doses</h2>
-        </div>
+      <div className="max-w-2xl mx-auto p-4 md:p-6 lg:p-8 bg-background min-h-screen font-sans">
         
-        {exportMessage && (
-          <div className="mb-3 bg-green-100 text-green-800 p-2 rounded text-center text-sm">
-            {exportMessage}
+        {/* Header */}
+        <header className="mb-8 text-center">
+          <h1 className="text-3xl font-bold tracking-tight text-foreground mb-2 flex items-center justify-center gap-2">
+             <Pill className="text-primary" /> MedTracker
+          </h1>
+          <p className="text-muted-foreground">Your personal medication schedule</p>
+        </header>
+
+        {/* Medication Grid Section */}
+        <section className="mb-8">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
+            <div className="flex gap-2">
+               <Button variant={isManageMode ? "default" : "outline"} onClick={() => setIsManageMode(!isManageMode)}>
+                 {isManageMode ? <Check size={16} className="mr-2"/> : <Edit size={16} className="mr-2" />}
+                 {isManageMode ? 'Done Managing' : 'Manage'}
+               </Button>
+              {isManageMode && (
+                 <Button variant="outline" onClick={handleAddNewMedication}>
+                   <PlusCircle size={16} className="mr-2" /> Add New
+                 </Button>
+              )}
+            </div>
           </div>
-        )}
-        
-        {medLogs.length === 0 ? (
-          <p className="text-gray-500 text-center">No medications logged yet</p>
-        ) : (
-          <div className="space-y-2">
-            {medLogs.slice(0, 3).map((log) => (
-              <div key={log.id} className="bg-white p-3 rounded-md shadow-sm flex justify-between">
-                <div>
-                  <span className="font-medium">{log.medicationName}</span>
-                  <div className="text-xs text-gray-500">
-                    {new Date(log.takenAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                  </div>
-                </div>
-                <div className="text-xs text-right">
-                  <div className="text-gray-400">Next dose</div>
-                  <div>{formatTime(log.nextDueAt)}</div>
-                </div>
-              </div>
-            ))}
-            {medLogs.length > 3 && (
-              <div className="text-center text-sm text-blue-500">
-                {medLogs.length - 3} more entries...
-              </div>
-            )}
-          </div>
-        )}
+
+          {medications.length === 0 ? (
+             <Card className="text-center py-8">
+                 <CardHeader>
+                     <CardTitle className="text-muted-foreground">No Medications Added</CardTitle>
+                 </CardHeader>
+                 <CardContent>
+                     <Button onClick={handleAddNewMedication}>
+                         <PlusCircle size={16} className="mr-2" /> Add Your First Medication
+                     </Button>
+                 </CardContent>
+             </Card>
+          ) : (
+             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+               {medications.map((med) => (
+                 <MedicationCard
+                   key={med.id}
+                   med={med}
+                   nextDueTimes={nextDueTimes}
+                   currentTime={currentTime}
+                   onTake={handleTakeMedication}
+                   onEdit={handleEditMedication}
+                   isManageMode={isManageMode}
+                   onDelete={handleDeleteMedication}
+                 />
+               ))}
+               {!isManageMode && medications.length < 6 && (
+                  <Card className="border-dashed border-2 hover:border-primary transition-colors flex flex-col items-center justify-center min-h-[200px]">
+                     <Button variant="ghost" className="text-muted-foreground hover:text-primary h-auto flex-col p-4" onClick={handleAddNewMedication}>
+                         <PlusCircle size={32} className="mb-2"/>
+                         Add Medication
+                     </Button>
+                  </Card>
+               )}
+             </div>
+          )}
+        </section>
+
+        {/* Recent Doses Log Section */}
+        <section>
+          <h2 className="text-xl font-semibold text-foreground mb-4">Recent Doses</h2>
+          {medLogs.length === 0 ? (
+            <p className="text-muted-foreground text-center italic py-4">No doses logged yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {lastThreeLogs.map((log) => (
+                <Card key={log.id} className="flex items-center justify-between p-3">
+                   <div className="flex items-center gap-3">
+                     {/* Pill icon styling remains the same */}
+                     <div className={`p-2 rounded-full ${log.medicationId.includes('codeine') ? 'bg-red-100 dark:bg-red-900' : log.medicationId.includes('ibuprofen') ? 'bg-blue-100 dark:bg-blue-900' : 'bg-green-100 dark:bg-green-900'}`}>
+                         <Pill size={16} className={`${log.medicationId.includes('codeine') ? 'text-red-600' : log.medicationId.includes('ibuprofen') ? 'text-blue-600' : 'text-green-600'}`} />
+                     </div>
+                     <div>
+                         <p className="font-medium text-foreground">{log.medicationName}</p>
+                         <p className="text-xs text-muted-foreground">
+                           Taken at: {formatTime(log.takenAt)}
+                         </p>
+                     </div>
+                   </div>
+                   <div className="text-right">
+                      <p className="text-sm font-medium text-foreground">{formatTime(log.nextDueAt)}</p>
+                      <p className="text-xs text-muted-foreground">Next Dose</p>
+                   </div>
+                </Card>
+              ))}
+              {medLogs.length > 3 && (
+                <p className="text-center text-sm text-muted-foreground pt-2">
+                  ... and {medLogs.length - 3} older entries
+                </p>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Add/Edit Dialog */}
+        <AddEditMedicationDialog
+          open={isDialogOpen}
+          onOpenChange={handleDialogChange}
+          medication={editingMedication}
+          onSave={handleSaveMedication}
+          medications={medications}
+        />
       </div>
-    </div>
+    </>
   );
 };
 
