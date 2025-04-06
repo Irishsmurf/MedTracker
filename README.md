@@ -33,9 +33,8 @@ Follow these instructions to get a copy of the project up and running on your lo
 
 1.  **Clone the repository:**
     ```bash
-    git clone <your-repository-url>
+    git clone https://github.com/Irishsmurf/MedTracker/
     ```
-    *(Replace `<your-repository-url>` with the actual URL of your Git repository)*
 
 2.  **Navigate to the project directory:**
     ```bash
