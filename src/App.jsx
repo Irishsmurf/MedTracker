@@ -96,28 +96,92 @@ const App = () => {
     return () => { console.log("Cleaning up Auth listener."); unsubscribeAuth(); };
   }, [isFcmSupported]);
 
-  // Firestore listeners
+  // Listener for Firestore Data Changes (MODIFIED with more logging)
+
   useEffect(() => {
-    if (!user) { setLoadingData(false); return; }
+    if (!user) {
+      setLoadingData(false);
+      // Clear state if necessary (already handled in auth listener)
+      // if (medications.length > 0) setMedications([]);
+      // if (medLogs.length > 0) setMedLogs([]);
+      // if (Object.keys(nextDueTimes).length > 0) setNextDueTimes({});
+      return;
+    }
+
     console.log(`Setting up Firestore listeners for user: ${user.uid}`);
     setLoadingData(true);
     let unsubMeds = () => { };
     let unsubLogs = () => { };
+
     try {
+      // Meds listener (Assume correct from previous steps)
       const medsCollectionRef = collection(db, 'users', user.uid, 'medications');
-      unsubMeds = onSnapshot(medsCollectionRef, (snap) => {
-        setMedications(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        setLoadingData(false); console.log("Firestore: Medications updated.");
-      }, (err) => { console.error("Firestore meds listener error:", err); toast.error("Failed to load meds"); setLoadingData(false); });
+      unsubMeds = onSnapshot(medsCollectionRef, (querySnapshot) => {
+        const userMedications = querySnapshot.docs.map(doc => ({
+          id: doc.id, ...doc.data(),
+          dosageAmount: doc.data().dosageAmount || null,
+          dosageUnit: doc.data().dosageUnit || null,
+        }));
+        setMedications(userMedications);
+        // Only set loading false here if logs also finished or handle separately
+        console.log("Firestore: Medications updated.");
+      }, (error) => {
+        console.error("Error fetching medications:", error);
+        toast.error("Failed to load medications", { description: error.message });
+        setLoadingData(false); // Stop loading on error
+      });
+
+      // Logs listener (ADDED DETAILED LOGGING)
       const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
       const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc"));
-      unsubLogs = onSnapshot(logsQuery, (snap) => {
-        setMedLogs(snap.docs.map(doc => { const d = doc.data(); return { id: doc.id, ...d, takenAt: d.takenAt?.toDate().toISOString(), nextDueAt: d.nextDueAt?.toDate().toISOString() }; }));
-        setLoadingData(false); console.log("Firestore: Logs updated.");
-      }, (err) => { console.error("Firestore logs listener error:", err); toast.error("Failed to load history"); setLoadingData(false); });
-    } catch (error) { console.error("Error setting up Firestore listeners:", error); setLoadingData(false); toast.error("Error connecting to database."); }
-    return () => { console.log(`Cleaning up Firestore listeners for user: ${user.uid}`); unsubMeds(); unsubLogs(); };
-  }, [user]);
+      unsubLogs = onSnapshot(logsQuery, (querySnapshot) => {
+        // --- Debug Log: Raw Snapshot ---
+        console.log(`Logs Snapshot received. Size: ${querySnapshot.size}, Empty: ${querySnapshot.empty}`);
+
+        const userLogs = [];
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          // --- Debug Log: Individual Doc Data ---
+          // console.log(`Processing log doc ${doc.id}:`, data);
+          // Check if timestamps exist before converting
+          const takenAtISO = data.takenAt?.toDate ? data.takenAt.toDate().toISOString() : null;
+          const nextDueAtISO = data.nextDueAt?.toDate ? data.nextDueAt.toDate().toISOString() : null;
+          if (!takenAtISO || !nextDueAtISO) {
+            console.warn(`Log doc ${doc.id} missing or has invalid timestamp fields:`, { takenAt: data.takenAt, nextDueAt: data.nextDueAt });
+          }
+          userLogs.push({
+            id: doc.id,
+            ...data,
+            takenAt: takenAtISO, // Store ISO string or null
+            nextDueAt: nextDueAtISO // Store ISO string or null
+          });
+        });
+
+        // --- Debug Log: Processed Array ---
+        console.log("Processed userLogs array:", userLogs);
+
+        setMedLogs(userLogs); // Update state with logs from Firestore
+        setLoadingData(false); // Set loading false after both listeners potentially ran
+        console.log("Logs loaded/updated from Firestore state set.");
+      }, (error) => {
+        console.error("Error fetching logs:", error);
+        toast.error("Failed to load medication history", { description: error.message });
+        setLoadingData(false); // Stop loading on error
+      });
+
+    } catch (error) {
+      console.error("Error setting up Firestore listeners:", error);
+      setLoadingData(false);
+      toast.error("Error connecting to database.");
+    }
+
+    // Cleanup listeners
+    return () => {
+      console.log(`Cleaning up Firestore listeners for user: ${user.uid}`);
+      unsubMeds();
+      unsubLogs();
+    };
+  }, [user]); // Re-run when user changes
 
   // Derive nextDueTimes
   useEffect(() => {
@@ -200,30 +264,52 @@ const App = () => {
       medicationName: med.name,
       dueAt: Timestamp.fromDate(nextDue), // When the reminder should be sent
     };
-    try { 
-      const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');     
+    try {
+      const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
       const remindersCollectionRef = collection(db, "scheduledReminders");
 
       await Promise.all([
         addDoc(logsCollectionRef, logEntry),
         addDoc(remindersCollectionRef, reminderEntry)
       ]);
-      toast.info("Medication Taken", { description: `${med.name} logged.` }); 
+      toast.info("Medication Taken", { description: `${med.name} logged.` });
     }
-    catch (error) { 
-      console.error("Error logging med and scheduling reminder:", error); 
+    catch (error) {
+      console.error("Error logging med and scheduling reminder:", error);
       toast.error("Failed to log med", { description: error.message });
     }
   }, [user]);
 
+  // Handle saving (add/edit) a medication (MODIFIED to log data)
   const handleSaveMedication = useCallback(async (medData, isEditing) => {
-    console.log(`App: handleSaveMedication triggered (${isEditing ? 'Edit' : 'Add'}) for`, medData?.name); // Debug Log
+    console.log(`App: handleSaveMedication triggered (${isEditing ? 'Edit' : 'Add'}) for`, medData?.name); // Existing log
     if (!user) { console.log("SaveMed: No user, aborting."); toast.error("Please sign in."); return; }
+
     const medDocRef = doc(db, 'users', user.uid, 'medications', medData.id);
-    const dataToSave = { name: medData.name, interval: medData.interval };
-    try { await setDoc(medDocRef, dataToSave); /* Toast handled in dialog */ }
-    catch (error) { console.error("Error saving med:", error); toast.error(`Failed to ${isEditing ? 'update' : 'add'} med`, { description: error.message }); }
-  }, [user]);
+
+    // Prepare data object
+    const dataToSave = {
+      name: medData.name,
+      interval: medData.interval,
+      dosageAmount: medData.dosageAmount, // Should be number or null
+      dosageUnit: medData.dosageUnit,     // Should be string or null
+    };
+
+    // --- ADD DEBUG LOG HERE ---
+    console.log("Attempting to save medication data:", JSON.stringify(dataToSave, null, 2));
+    // --- END DEBUG LOG ---
+
+    try {
+      // Attempt the Firestore write operation
+      await setDoc(medDocRef, dataToSave);
+      // Toast is handled within the Dialog component upon successful save trigger
+      // (Though it won't be called if setDoc fails)
+    } catch (error) {
+      // Log the specific permission error
+      console.error("Error saving med:", error); // This is where your current error appears
+      toast.error(`Failed to ${isEditing ? 'update' : 'add'} medication`, { description: `Permission denied or other error: ${error.message}` });
+    }
+  }, [user]); // Depends on user
 
   const handleDeleteMedication = useCallback(async (medIdToDelete) => {
     console.log("App: handleDeleteMedication triggered for ID:", medIdToDelete); // Debug Log
@@ -257,49 +343,49 @@ const App = () => {
     console.log("Current medLogs:", medLogs); // Log: Data Input
 
     if (!medLogs || medLogs.length === 0) {
-        console.log("CopyLog: Log is empty or invalid.");
-        toast.warning("Log is empty", { description: "There are no medication logs to copy." });
-        return;
+      console.log("CopyLog: Log is empty or invalid.");
+      toast.warning("Log is empty", { description: "There are no medication logs to copy." });
+      return;
     }
 
     try {
-        // Format log data for clipboard (more readable with date)
-        const formattedLog = medLogs
-            .map((log, index) => {
-                // Log individual log item data being processed
-                // console.log(`CopyLog Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
-                // Ensure dates are valid before formatting
-                const takenTime = log.takenAt ? formatTime(log.takenAt, true) : 'N/A';
-                const dueTime = log.nextDueAt ? formatTime(log.nextDueAt, true) : 'N/A';
-                // Ensure medicationName exists
-                const medName = log.medicationName || 'Unknown Medication';
-                return `${medName} - Taken: ${takenTime} - Next Due: ${dueTime}`;
-            })
-            .join('\n'); // Newline separated
+      // Format log data for clipboard (more readable with date)
+      const formattedLog = medLogs
+        .map((log, index) => {
+          // Log individual log item data being processed
+          // console.log(`CopyLog Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
+          // Ensure dates are valid before formatting
+          const takenTime = log.takenAt ? formatTime(log.takenAt, true) : 'N/A';
+          const dueTime = log.nextDueAt ? formatTime(log.nextDueAt, true) : 'N/A';
+          // Ensure medicationName exists
+          const medName = log.medicationName || 'Unknown Medication';
+          return `${medName} - Taken: ${takenTime} - Next Due: ${dueTime}`;
+        })
+        .join('\n'); // Newline separated
 
-        console.log("CopyLog: Formatted log string length:", formattedLog.length); // Log: Formatted data
-        // console.log("CopyLog: Formatted log content:\n", formattedLog); // Log: Uncomment to see full content
+      console.log("CopyLog: Formatted log string length:", formattedLog.length); // Log: Formatted data
+      // console.log("CopyLog: Formatted log content:\n", formattedLog); // Log: Uncomment to see full content
 
-        if (!formattedLog) {
-             console.error("CopyLog: Formatted log string is empty!");
-             toast.error("Copy failed", { description: "Could not format log data."});
-             return;
-        }
+      if (!formattedLog) {
+        console.error("CopyLog: Formatted log string is empty!");
+        toast.error("Copy failed", { description: "Could not format log data." });
+        return;
+      }
 
-        // Use Clipboard API
-        navigator.clipboard.writeText(formattedLog)
-            .then(() => {
-                console.log("CopyLog: writeText successful."); // Log: Success
-                toast.success("Log copied to clipboard!");
-            })
-            .catch(err => {
-                console.error('CopyLog: writeText failed: ', err); // Log: Error
-                toast.error("Copy failed", { description: "Could not access clipboard. Check browser permissions." });
-            });
+      // Use Clipboard API
+      navigator.clipboard.writeText(formattedLog)
+        .then(() => {
+          console.log("CopyLog: writeText successful."); // Log: Success
+          toast.success("Log copied to clipboard!");
+        })
+        .catch(err => {
+          console.error('CopyLog: writeText failed: ', err); // Log: Error
+          toast.error("Copy failed", { description: "Could not access clipboard. Check browser permissions." });
+        });
 
     } catch (error) {
-        console.error("CopyLog: Error during formatting or copy:", error);
-        toast.error("Copy failed", { description: "An unexpected error occurred." });
+      console.error("CopyLog: Error during formatting or copy:", error);
+      toast.error("Copy failed", { description: "An unexpected error occurred." });
     }
 
   }, [medLogs]); // Depends on medLogs
@@ -309,62 +395,62 @@ const App = () => {
     console.log("Current medLogs:", medLogs); // Log: Data Input
 
     if (!medLogs || medLogs.length === 0) {
-        console.log("ExportCSV: Log is empty or invalid.");
-        toast.warning("Log is empty", { description: "There are no medication logs to export." });
-        return;
+      console.log("ExportCSV: Log is empty or invalid.");
+      toast.warning("Log is empty", { description: "There are no medication logs to export." });
+      return;
     }
 
     try {
-        // CSV Header
-        const header = ['Medication Name', 'Taken At (ISO)', 'Next Due At (ISO)'];
-        // CSV Rows
-        const rows = medLogs.map((log, index) => {
-            // Log individual log item data being processed
-            // console.log(`ExportCSV Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
-            // Ensure values exist, default to empty string if not
-            const name = log.medicationName || '';
-            const takenAt = log.takenAt || ''; // These should be ISO strings from Firestore listener
-            const nextDueAt = log.nextDueAt || ''; // These should be ISO strings
-            // Quote name and escape quotes within name
-            return [`"${name.replace(/"/g, '""')}"`, takenAt, nextDueAt];
-        });
+      // CSV Header
+      const header = ['Medication Name', 'Taken At (ISO)', 'Next Due At (ISO)'];
+      // CSV Rows
+      const rows = medLogs.map((log, index) => {
+        // Log individual log item data being processed
+        // console.log(`ExportCSV Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
+        // Ensure values exist, default to empty string if not
+        const name = log.medicationName || '';
+        const takenAt = log.takenAt || ''; // These should be ISO strings from Firestore listener
+        const nextDueAt = log.nextDueAt || ''; // These should be ISO strings
+        // Quote name and escape quotes within name
+        return [`"${name.replace(/"/g, '""')}"`, takenAt, nextDueAt];
+      });
 
-        // Combine header and rows
-        const csvContent = [header.join(','), ...rows.map(row => row.join(','))].join('\n');
-        console.log("ExportCSV: Generated CSV content length:", csvContent.length); // Log: Generated CSV
-        // console.log("ExportCSV: CSV content:\n", csvContent); // Log: Uncomment to see full content
+      // Combine header and rows
+      const csvContent = [header.join(','), ...rows.map(row => row.join(','))].join('\n');
+      console.log("ExportCSV: Generated CSV content length:", csvContent.length); // Log: Generated CSV
+      // console.log("ExportCSV: CSV content:\n", csvContent); // Log: Uncomment to see full content
 
-        if (!csvContent) {
-            console.error("ExportCSV: Generated CSV content is empty!");
-            toast.error("Export failed", { description: "Could not generate CSV data."});
-            return;
-        }
+      if (!csvContent) {
+        console.error("ExportCSV: Generated CSV content is empty!");
+        toast.error("Export failed", { description: "Could not generate CSV data." });
+        return;
+      }
 
-        // Create Blob and Download Link
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
+      // Create Blob and Download Link
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement("a");
 
-        // Check for download attribute support
-        if (link.download !== undefined) {
-            const url = URL.createObjectURL(blob);
-            link.setAttribute("href", url);
-            link.setAttribute("download", `medication_log_${new Date().toISOString().split('T')[0]}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            console.log("ExportCSV: Triggering download link click..."); // Log: Before click
-            link.click();
-            console.log("ExportCSV: Download link clicked."); // Log: After click
-            // Cleanup
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url); // Release object URL memory
-            toast.success("Log exported as CSV!");
-        } else {
-            console.error("ExportCSV: link.download attribute not supported.");
-            toast.error("Export failed", { description: "CSV export is not supported in this browser." });
-        }
+      // Check for download attribute support
+      if (link.download !== undefined) {
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", `medication_log_${new Date().toISOString().split('T')[0]}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        console.log("ExportCSV: Triggering download link click..."); // Log: Before click
+        link.click();
+        console.log("ExportCSV: Download link clicked."); // Log: After click
+        // Cleanup
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url); // Release object URL memory
+        toast.success("Log exported as CSV!");
+      } else {
+        console.error("ExportCSV: link.download attribute not supported.");
+        toast.error("Export failed", { description: "CSV export is not supported in this browser." });
+      }
     } catch (error) {
-        console.error("ExportCSV: Error during CSV generation or download:", error);
-        toast.error("Export failed", { description: "An unexpected error occurred." });
+      console.error("ExportCSV: Error during CSV generation or download:", error);
+      toast.error("Export failed", { description: "An unexpected error occurred." });
     }
   }, [medLogs]); // Depends on medLogs
 
