@@ -24,7 +24,6 @@ const MedicationTracker = () => {
     return savedNextDueTimes ? JSON.parse(savedNextDueTimes) : {};
   });
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [exportMessage, setExportMessage] = useState('');
 
   // Save medications to localStorage when they change
@@ -93,12 +92,6 @@ const MedicationTracker = () => {
     return { hours, minutes, isOverdue: false, progress };
   };
 
-  const enableNotifications = () => {
-    setNotificationsEnabled(true);
-    setExportMessage('Notifications enabled!');
-    setTimeout(() => setExportMessage(''), 3000);
-  };
-
   const addMedication = () => {
     if (!newMedication.name.trim()) {
       setExportMessage('Please enter a medication name');
@@ -160,21 +153,6 @@ const MedicationTracker = () => {
     <div className="max-w-md mx-auto p-4 bg-gray-50 min-h-screen">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-center mb-6">Medication Tracker</h1>
-        
-        {/* Notification permission button */}
-        {!notificationsEnabled && (
-          <div className="mb-4 bg-blue-50 p-3 rounded-lg border border-blue-200">
-            <p className="text-sm text-blue-800 mb-2">
-              Enable notifications to be alerted when medications are due.
-            </p>
-            <button
-              onClick={enableNotifications}
-              className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 px-3 rounded"
-            >
-              Enable Notifications
-            </button>
-          </div>
-        )}
         
         {/* Medication Management UI */}
         <div className="mb-6">
