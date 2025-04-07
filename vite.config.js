@@ -42,7 +42,7 @@ const serviceWorkerDevPlugin = () => ({
                         .replace(/__VITE_FIREBASE_APP_ID__/g, env.VITE_FIREBASE_APP_ID || '');
 
                     // --- DEBUG LOG ---
-                    console.log('[Middleware] SW Content AFTER replacement (first 200 chars):', swContent.substring(0, 200)); // Check if placeholders are gone
+                    console.log('[Middleware] SW Content AFTER replacement (first 200 chars):', swContent.substring(0, 800)); // Check if placeholders are gone
 
                     res.setHeader('Content-Type', 'application/javascript');
                     res.end(swContent);
