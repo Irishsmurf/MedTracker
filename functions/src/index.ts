@@ -10,7 +10,7 @@ import { getMessaging, Notification } from "firebase-admin/messaging"; // Import
 
 // Initialize Firebase Admin SDK - Often not needed explicitly in Cloud Functions v1/v2
 // The environment usually provides initialized services. Remove the explicit call.
-initializeApp(); // REMOVE or comment out this line
+// initializeApp(); // REMOVE or comment out this line
 
 // Get Firestore and Messaging instances using the imported functions
 const db = getFirestore();
@@ -74,9 +74,11 @@ export const sendMedicationReminders = onSchedule(
             const tokensSnapshot = await db.collection("users").doc(userId).collection("fcmTokens").get();
             if (!tokensSnapshot.empty) {
               tokensToNotifyByUser[userId].tokens = tokensSnapshot.docs.map(doc => doc.id);
+            } else {
+              logger.warn(`No FCM tokens found for user ${userId} during fetch.`);
             }
         } catch(tokenError) {
-            logger.error(`Failed to fetch tokens for user ${userId}:`, tokenError);
+            logger.error(`Failed to fetch tokens for user ${userId}:`, tokenError); // Enhanced logging
             if(tokensToNotifyByUser[userId]) { tokensToNotifyByUser[userId].tokens = []; }
         }
       });
@@ -84,35 +86,68 @@ export const sendMedicationReminders = onSchedule(
 
       // 3. Prepare and Send notifications (using 'messaging' instance)
       // Define the message structure type, using the imported Notification type
-      type MessageToSend = { notification: Notification, token: string, _reminderId: string };
+      type MessageToSend = { notification: Notification, token: string, userId: string, _reminderId: string }; // Added userId
       const messagesToSend: Array<MessageToSend> = [];
-      const invalidTokensByReminderId: { [reminderId: string]: string[] } = {};
 
       userIds.forEach(userId => {
         const userData = tokensToNotifyByUser[userId];
         if (userData?.tokens?.length > 0) {
-          logger.log(`Preparing notification for ${userData.medName} to user ${userId} (${userData.tokens.length} tokens)`);
+          logger.info(`Preparing ${userData.tokens.length} notification(s) for ${userData.medName} to user ${userId}.`);
           userData.tokens.forEach(token => {
               messagesToSend.push({
                   notification: { title: "Medication Reminder", body: `Time to take ${userData.medName}!` },
                   token: token,
-                  _reminderId: userData.reminderId
+                  userId: userId, // Populate userId
+                  _reminderId: userData.reminderId // _reminderId is kept for context if needed, but not directly used for new token deletion
               });
           });
         } else if (userData) {
-          logger.warn(`No FCM tokens found for user ${userId}. Cannot send reminder for ${userData.medName}.`);
+          logger.warn(`No FCM tokens found for user ${userId} when preparing messages. Cannot send reminder for ${userData.medName}.`);
+        } else {
+          logger.warn(`User data not found for user ID: ${userId} when preparing messages. This might indicate an earlier issue.`);
         }
       });
 
+      const tokensToDeleteByUserId: { [userId: string]: string[] } = {};
+
       if (messagesToSend.length > 0) {
+          logger.info(`Attempting to send ${messagesToSend.length} messages.`);
           // Use 'messaging' instance here
           const response = await messaging.sendEach(messagesToSend.map(msg => ({
                notification: msg.notification,
-               token: msg.token
+               token: msg.token,
           })));
-          logger.info(`Sent ${response.successCount} messages successfully.`);
-          // Process failures (no change in logic)
-          if (response.failureCount > 0) { /* ... error handling ... */ }
+
+          logger.info(`Successfully sent ${response.successCount} messages.`);
+
+          if (response.failureCount > 0) {
+            logger.warn(`${response.failureCount} messages failed to send.`);
+            response.results.forEach((result, index) => {
+              if (result.error) {
+                const failedMessage = messagesToSend[index];
+                const failedToken = failedMessage.token;
+                const userId = failedMessage.userId;
+
+                logger.warn(`Failed to send notification to token: ${failedToken} for user ${userId}. Error:`, result.error);
+
+                // Check for error codes indicating an invalid or unregistered token
+                const errorCode = result.error.code;
+                if (errorCode === 'messaging/registration-token-not-registered' ||
+                    errorCode === 'messaging/invalid-registration-token') {
+                  if (!tokensToDeleteByUserId[userId]) {
+                    tokensToDeleteByUserId[userId] = [];
+                  }
+                  // Avoid duplicate token entries for deletion
+                  if (!tokensToDeleteByUserId[userId].includes(failedToken)) {
+                    tokensToDeleteByUserId[userId].push(failedToken);
+                    logger.info(`Marking token ${failedToken} for user ${userId} for deletion due to error: ${errorCode}`);
+                  }
+                }
+              }
+            });
+          }
+      } else {
+        logger.info("No messages to send in this interval.");
       }
 
       // 4. Delete processed reminders and invalid tokens (using 'db' instance)
@@ -121,23 +156,31 @@ export const sendMedicationReminders = onSchedule(
 
       dueRemindersSnapshot.forEach(doc => {
           const reminderId = doc.id;
-          logger.log(`Adding delete promise for reminder: ${reminderId}`);
+          logger.info(`Adding delete promise for processed reminder: ${reminderId}`);
           deletePromises.push(db.collection("scheduledReminders").doc(reminderId).delete());
-
-          const invalidTokens = invalidTokensByReminderId[reminderId];
-          if (invalidTokens?.length > 0) {
-               const userId = doc.data().userId;
-               if (userId) {
-                   logger.warn(`Adding delete promises for ${invalidTokens.length} invalid tokens for user ${userId}`);
-                   invalidTokens.forEach(token => {
-                       deletePromises.push(db.collection("users").doc(userId).collection("fcmTokens").doc(token).delete());
-                   });
-               }
-          }
       });
 
-      await Promise.all(deletePromises);
-      logger.info(`Cleaned up ${dueRemindersSnapshot.size} processed reminders and associated invalid tokens.`);
+      // New logic for deleting invalid tokens
+      Object.entries(tokensToDeleteByUserId).forEach(([userId, tokens]) => {
+        if (tokens.length > 0) {
+          logger.info(`Preparing to delete ${tokens.length} invalid token(s) for user ${userId}.`);
+          tokens.forEach(token => {
+            logger.info(`Adding delete promise for invalid token: ${token} for user ${userId}`);
+            deletePromises.push(
+              db.collection("users").doc(userId).collection("fcmTokens").doc(token).delete()
+            );
+          });
+        }
+      });
+
+      if (deletePromises.length > 0) {
+        await Promise.all(deletePromises);
+        logger.info(`Successfully executed ${deletePromises.length} delete operations for reminders and invalid tokens.`);
+      } else {
+        logger.info("No reminders or tokens to delete in this interval.");
+      }
+
+      logger.info(`Cleaned up ${dueRemindersSnapshot.size} processed reminders and attempted deletion of invalid tokens based on messaging failures.`);
 
       return; // Return void
 

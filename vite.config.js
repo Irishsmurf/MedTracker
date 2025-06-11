@@ -48,19 +48,62 @@ const serviceWorkerDevPlugin = () => ({
     }
 });
 
+// Plugin to handle replacing placeholders in SW during prod build
+const serviceWorkerProdPlugin = () => ({
+    name: 'replace-sw-placeholders-prod',
+    writeBundle: async (options) => {
+        console.log('Service Worker Prod Plugin: Starting replacements...');
+        // Load production environment variables
+        const env = loadEnv('production', process.cwd(), '');
+
+        // Construct the path to firebase-messaging-sw.js in the output directory
+        const swPath = path.resolve(options.dir, 'firebase-messaging-sw.js');
+
+        try {
+            // Read the file content
+            let swContent = await fs.promises.readFile(swPath, 'utf-8');
+            console.log(`Service Worker Prod Plugin: Read ${swPath}`);
+
+            // Perform replacements
+            swContent = swContent
+                .replace(/__VITE_FIREBASE_API_KEY__/g, env.VITE_FIREBASE_API_KEY || '')
+                .replace(/__VITE_FIREBASE_AUTH_DOMAIN__/g, env.VITE_FIREBASE_AUTH_DOMAIN || '')
+                .replace(/__VITE_FIREBASE_PROJECT_ID__/g, env.VITE_FIREBASE_PROJECT_ID || '')
+                .replace(/__VITE_FIREBASE_STORAGE_BUCKET__/g, env.VITE_FIREBASE_STORAGE_BUCKET || '')
+                .replace(/__VITE_FIREBASE_MESSAGING_SENDER_ID__/g, env.VITE_FIREBASE_MESSAGING_SENDER_ID || '')
+                .replace(/__VITE_FIREBASE_APP_ID__/g, env.VITE_FIREBASE_APP_ID || '');
+
+            console.log('Service Worker Prod Plugin: Placeholders replaced.');
+
+            // Write the modified content back to the file
+            await fs.promises.writeFile(swPath, swContent, 'utf-8');
+            console.log(`Service Worker Prod Plugin: Modified ${swPath} written successfully.`);
+        } catch (error) {
+            console.error(`Service Worker Prod Plugin: Error processing ${swPath}:`, error);
+        }
+    }
+});
+
 
 // Main Vite config
 export default defineConfig(({ mode }) => {
     // Load env vars for use in the define block (for production build)
     const env = loadEnv(mode, process.cwd(), '');
 
+    // Build the plugins array conditionally
+    const plugins = [
+        react(),
+        tailwindcss(),
+    ];
+
+    if (mode === 'development') {
+        plugins.push(serviceWorkerDevPlugin());
+    } else if (mode === 'production') {
+        plugins.push(serviceWorkerProdPlugin());
+    }
+
     return {
-        plugins: [
-            react(),
-            tailwindcss(),
-            // Add the custom plugin ONLY for development mode
-            mode === 'development' ? serviceWorkerDevPlugin() : null
-        ],
+        plugins: plugins,
         resolve: {
             alias: {
             "@": path.resolve(__dirname, "./src"),
