@@ -1,28 +1,33 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react'; // Keep useState for App-specific UI state
 import {
-  Pill, Check, Edit, PlusCircle, MoreHorizontal, ClipboardCopy, Download,
-  LayoutGrid, CalendarDays, Bell, BellOff, LogOut, Sun, Moon // Icons
+  LayoutGrid, CalendarDays, Bell, BellOff // Icons needed for App.jsx
 } from "lucide-react";
 import { toast } from "sonner";
+// Pill, Sun, Moon, Check, Edit, PlusCircle, MoreHorizontal, ClipboardCopy, Download, LogOut are moved to sub-components
 
-// Import Firebase Auth, Firestore, & Messaging functions and instances
-import { auth, db } from './firebaseConfig'; // Assuming you created this file in Step 2
-import { onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider } from "firebase/auth";
+// Import Firebase instances (db might be needed for some direct operations if any remain, auth is used by hooks)
+import { db } from './firebaseConfig'; // Assuming you created this file in Step 2
+// Firebase functions like Timestamp, collection, doc, addDoc, setDoc, deleteDoc might still be needed for handlers in App.jsx
 import {
-  collection, doc, onSnapshot, addDoc, setDoc, deleteDoc, query, orderBy, Timestamp
+  collection, doc, addDoc, setDoc, deleteDoc, Timestamp
 } from "firebase/firestore";
-import { getMessaging, getToken, isSupported } from "firebase/messaging"; // Messaging imports
+
+
+// Import Custom Hooks
+import useAuth from './hooks/useAuth';
+import useFirestoreData from './hooks/useFirestoreData';
+import useNotifications from './hooks/useNotifications';
 
 // Import UI Components
-import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button"; // Still needed for Sign In button
 import { Toaster as SonnerToaster } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"; // Still needed for notification button logic
 
 // Import Custom Components
-import MedicationGrid from './components/MedicationGrid';
-import LogList from './components/LogList';
+// MedicationGrid and LogList are now part of DashboardTab
+import AppHeader from './components/AppHeader'; // New component
+import DashboardTab from './components/DashboardTab'; // New component
 import AddEditMedicationDialog from './components/AddEditMedicationDialog';
 import MedicationCalendarView from './components/MedicationCalendarView';
 import { ThemeProvider, useTheme } from './components/ThemeProvider'; // Import useTheme hook
@@ -41,294 +46,150 @@ const LOGS_PER_PAGE = 25;
  * Manages state via Firestore, Auth, and renders child components.
  */
 const App = () => {
-  // --- State ---
-  const [user, setUser] = useState(null);
-  const [loadingAuth, setLoadingAuth] = useState(true);
-  const [medications, setMedications] = useState([]);
-  const [medLogs, setMedLogs] = useState([]);
-  const [loadingData, setLoadingData] = useState(true);
-  const [nextDueTimes, setNextDueTimes] = useState({});
+  // --- Custom Hooks ---
+  const { user, loadingAuth, handleSignIn, handleSignOut: authSignOut } = useAuth();
+  const { medications, medLogs, nextDueTimes, loadingData } = useFirestoreData(user);
+  const { notificationPermission, handleRequestNotificationPermission, isFcmSupported } = useNotifications(user);
+  // --- End Custom Hooks ---
+
+  // --- App-specific UI State ---
   const [isManageMode, setIsManageMode] = useState(false);
   const [editingMedication, setEditingMedication] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [visibleLogCount, setVisibleLogCount] = useState(LOGS_PER_PAGE);
-  // FCM/Notification State
-  const [notificationPermission, setNotificationPermission] = useState('default');
-  const [isFcmSupported, setIsFcmSupported] = useState(false);
-  // --- End State ---
+  // --- End App-specific UI State ---
 
   const { setTheme, resolvedTheme } = useTheme(); // Get theme functions/state
 
-  // --- Effects ---
-  // Check FCM support and initial permission status
-  useEffect(() => {
-    console.log("Checking FCM support...");
-    isSupported().then((supported) => {
-      setIsFcmSupported(supported);
-      if (supported) {
-        console.log("FCM is supported. Initial permission:", Notification.permission);
-        setNotificationPermission(Notification.permission);
-      } else {
-        console.log("FCM is not supported in this browser.");
-      }
-    }).catch(err => {
-      console.error("Error checking FCM support:", err);
-      setIsFcmSupported(false); // Assume not supported on error
-    });
-  }, []);
-
-  // Auth listener
-  useEffect(() => {
-    setLoadingAuth(true);
-    console.log("Setting up Auth listener...");
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      console.log("Auth state changed:", currentUser ? currentUser.uid : "null");
-      setUser(currentUser);
-      setLoadingAuth(false);
-      if (!currentUser) {
-        setMedications([]); setMedLogs([]); setNextDueTimes({}); setLoadingData(true);
-        setIsManageMode(false); setVisibleLogCount(LOGS_PER_PAGE);
-      } else {
-        if (isFcmSupported) { setNotificationPermission(Notification.permission); }
-      }
-    });
-    return () => { console.log("Cleaning up Auth listener."); unsubscribeAuth(); };
-  }, [isFcmSupported]);
-
-  // Listener for Firestore Data Changes (MODIFIED with more logging)
-
+  // --- Effects specific to App.jsx ---
+  // Update current time
+  useEffect(() => { const timer = setInterval(() => setCurrentTime(new Date()), 10000); return () => clearInterval(timer); }, []);
+  // Reset pagination when medLogs change or user changes (new set of logs)
+  useEffect(() => { setVisibleLogCount(LOGS_PER_PAGE); }, [medLogs.length, user]);
+  // Clear manage mode and dialogs if user signs out
   useEffect(() => {
     if (!user) {
-      setLoadingData(false);
-      // Clear state if necessary (already handled in auth listener)
-      // if (medications.length > 0) setMedications([]);
-      // if (medLogs.length > 0) setMedLogs([]);
-      // if (Object.keys(nextDueTimes).length > 0) setNextDueTimes({});
+      setIsManageMode(false);
+      setIsDialogOpen(false);
+      setEditingMedication(null);
+    }
+  }, [user]);
+  // --- End Effects ---
+
+  // Renaming handleSignOut from useAuth to avoid conflict if any local one was defined,
+  // though it's being removed. Using authSignOut for clarity.
+  const handleSignOut = useCallback(async () => {
+    try {
+      await authSignOut(); // Call the signout from useAuth hook
+      toast.info("Signed out.");
+    } catch (error) {
+      console.error("Sign-out error:", error);
+      toast.error("Sign-out failed");
+    }
+  }, [authSignOut]);
+
+
+  // --- Core Logic Handlers (with Debugging Logs) ---
+  // These handlers now use `user` from `useAuth` and `medications` from `useFirestoreData`
+  const handleTakeMedication = useCallback(async (med) => {
+    if (!user) { toast.error("Please sign in."); return; }
+    // Ensure med.interval is used, which should be dosageIntervalHours from the hook if that's the intended field
+    // Assuming med.interval is the correct field name from the medication object.
+    // If it's med.dosageIntervalHours, then that should be used.
+    // For this refactor, I'll assume med.interval is what's passed and correct.
+    // If med.dosageIntervalHours is defined in medications state from useFirestoreData, use that.
+    // Let's assume 'med.interval' is the correct prop passed to this handler from MedicationGrid.
+    // It might need to be med.dosageIntervalHours if that's the field name in the medications state.
+    const intervalHours = med.dosageIntervalHours || med.interval; // Prefer specific field if available
+    if (typeof intervalHours !== 'number' || intervalHours <= 0) {
+      console.error("Invalid or missing dosage interval for medication:", med.name);
+      toast.error("Invalid Interval", { description: `Cannot log ${med.name} due to missing or invalid interval.`});
       return;
     }
 
-    console.log(`Setting up Firestore listeners for user: ${user.uid}`);
-    setLoadingData(true);
-    let unsubMeds = () => { };
-    let unsubLogs = () => { };
-
-    try {
-      // Meds listener (Assume correct from previous steps)
-      const medsCollectionRef = collection(db, 'users', user.uid, 'medications');
-      unsubMeds = onSnapshot(medsCollectionRef, (querySnapshot) => {
-        const userMedications = querySnapshot.docs.map(doc => ({
-          id: doc.id, ...doc.data(),
-          dosageAmount: doc.data().dosageAmount || null,
-          dosageUnit: doc.data().dosageUnit || null,
-        }));
-        setMedications(userMedications);
-        // Only set loading false here if logs also finished or handle separately
-        console.log("Firestore: Medications updated.");
-      }, (error) => {
-        console.error("Error fetching medications:", error);
-        toast.error("Failed to load medications", { description: error.message });
-        setLoadingData(false); // Stop loading on error
-      });
-
-      // Logs listener (ADDED DETAILED LOGGING)
-      const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
-      const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc"));
-      unsubLogs = onSnapshot(logsQuery, (querySnapshot) => {
-        // --- Debug Log: Raw Snapshot ---
-        console.log(`Logs Snapshot received. Size: ${querySnapshot.size}, Empty: ${querySnapshot.empty}`);
-
-        const userLogs = [];
-        querySnapshot.forEach((doc) => {
-          const data = doc.data();
-          // --- Debug Log: Individual Doc Data ---
-          // console.log(`Processing log doc ${doc.id}:`, data);
-          // Check if timestamps exist before converting
-          const takenAtISO = data.takenAt?.toDate ? data.takenAt.toDate().toISOString() : null;
-          const nextDueAtISO = data.nextDueAt?.toDate ? data.nextDueAt.toDate().toISOString() : null;
-          if (!takenAtISO || !nextDueAtISO) {
-            console.warn(`Log doc ${doc.id} missing or has invalid timestamp fields:`, { takenAt: data.takenAt, nextDueAt: data.nextDueAt });
-          }
-          userLogs.push({
-            id: doc.id,
-            ...data,
-            takenAt: takenAtISO, // Store ISO string or null
-            nextDueAt: nextDueAtISO // Store ISO string or null
-          });
-        });
-
-        // --- Debug Log: Processed Array ---
-        console.log("Processed userLogs array:", userLogs);
-
-        setMedLogs(userLogs); // Update state with logs from Firestore
-        setLoadingData(false); // Set loading false after both listeners potentially ran
-        console.log("Logs loaded/updated from Firestore state set.");
-      }, (error) => {
-        console.error("Error fetching logs:", error);
-        toast.error("Failed to load medication history", { description: error.message });
-        setLoadingData(false); // Stop loading on error
-      });
-
-    } catch (error) {
-      console.error("Error setting up Firestore listeners:", error);
-      setLoadingData(false);
-      toast.error("Error connecting to database.");
-    }
-
-    // Cleanup listeners
-    return () => {
-      console.log(`Cleaning up Firestore listeners for user: ${user.uid}`);
-      unsubMeds();
-      unsubLogs();
-    };
-  }, [user]); // Re-run when user changes
-
-  // Derive nextDueTimes
-  useEffect(() => {
-    if (medLogs.length === 0) { setNextDueTimes({}); return; }
-    const latest = {}; medLogs.forEach(log => { if (!latest[log.medicationId] && log.nextDueAt) latest[log.medicationId] = log.nextDueAt; });
-    setNextDueTimes(latest);
-  }, [medLogs]);
-
-  // Update current time
-  useEffect(() => { const timer = setInterval(() => setCurrentTime(new Date()), 10000); return () => clearInterval(timer); }, []);
-  // Reset pagination
-  useEffect(() => { setVisibleLogCount(LOGS_PER_PAGE); }, [medLogs.length]);
-  // --- End Effects ---
-
-  // --- Notification Handler ---
-  const handleRequestNotificationPermission = useCallback(async () => {
-    console.log("handleRequestNotificationPermission called.");
-    if (!isFcmSupported) { toast.error("Notifications not supported"); return; }
-    if (!user) { toast.error("Please sign in first."); return; }
-    console.log("Requesting notification permission...");
-    try {
-      const permission = await Notification.requestPermission();
-      console.log("Notification permission result:", permission);
-      setNotificationPermission(permission);
-      if (permission === 'granted') {
-        toast.info("Permission granted. Getting FCM token...");
-        const messaging = getMessaging();
-        const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
-        if (!vapidKey) { console.error("VAPID key missing!"); toast.error("Configuration error"); return; }
-        console.log("Attempting to get FCM token...");
-        const currentToken = await getToken(messaging, { vapidKey: vapidKey });
-        if (currentToken) {
-          console.log('FCM Token received:', currentToken);
-          const tokenDocRef = doc(db, 'users', user.uid, 'fcmTokens', currentToken);
-          console.log("Saving token to Firestore...");
-          await setDoc(tokenDocRef, { createdAt: Timestamp.now(), userAgent: navigator.userAgent });
-          console.log("Token saved.");
-          toast.success("Notifications enabled!");
-        } else { console.warn('No FCM registration token available.'); toast.warning("Could not get token."); }
-      } else if (permission === 'denied') { toast.error("Notifications blocked"); }
-      else { toast.info("Permission dismissed."); }
-    } catch (error) { console.error('Error during notification setup:', error); toast.error("Failed to enable notifications"); }
-  }, [user, isFcmSupported]);
-  // --- End Notification Handler ---
-
-
-  // --- Auth Handlers ---
-  const handleSignIn = useCallback(async () => {
-    console.log("Sign-in button clicked!"); // Debug Log
-    const provider = new GoogleAuthProvider();
-    try {
-      setLoadingAuth(true);
-      console.log("Attempting signInWithPopup..."); // Debug Log
-      await signInWithPopup(auth, provider);
-      console.log("signInWithPopup successful (or popup closed)"); // Debug Log
-      toast.success("Signed in successfully!");
-    } catch (error) {
-      console.error("Sign-in error:", error); // Keep detailed error log
-      if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') { toast.info("Sign-in cancelled."); }
-      else { toast.error("Sign-in failed", { description: error.message }); }
-      setLoadingAuth(false);
-    }
-  }, [setLoadingAuth]); // Dependency added
-
-  const handleSignOut = useCallback(async () => {
-    console.log("App: handleSignOut triggered"); // Debug Log
-    try { await signOut(auth); toast.info("Signed out."); }
-    catch (error) { console.error("Sign-out error:", error); toast.error("Sign-out failed"); }
-  }, []);
-  // --- End Auth Handlers ---
-
-  // --- Core Logic Handlers (with Debugging Logs) ---
-  const handleTakeMedication = useCallback(async (med) => {
-    console.log("App: handleTakeMedication triggered for", med?.name); // Debug Log
-    if (!user) { console.log("TakeMed: No user, aborting."); toast.error("Please sign in."); return; }
-    const now = new Date(); const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-    const logEntry = { medicationId: med.id, medicationName: med.name, takenAt: Timestamp.fromDate(now), nextDueAt: Timestamp.fromDate(nextDue) };
-    const reminderEntry = {
-      userId: user.uid, // Associate with the current user
+    const now = new Date();
+    const nextDue = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
+    const logEntry = {
+      medicationId: med.id,
       medicationName: med.name,
-      dueAt: Timestamp.fromDate(nextDue), // When the reminder should be sent
+      takenAt: Timestamp.fromDate(now),
+      nextDueAt: Timestamp.fromDate(nextDue), // This will be used by useFirestoreData to calculate nextDueTimes
+      dosageAmount: med.dosageAmount || null,
+      dosageUnit: med.dosageUnit || null,
+    };
+    // The reminderEntry logic might be better suited for a backend function triggered by new log entries.
+    // For now, keeping it here if it's essential for client-side logic, but be aware of limitations.
+    const reminderEntry = {
+      userId: user.uid,
+      medicationName: med.name,
+      dueAt: Timestamp.fromDate(nextDue),
     };
     try {
       const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
+      // Consider moving reminder scheduling to a Firebase Function for reliability
       const remindersCollectionRef = collection(db, "scheduledReminders");
 
       await Promise.all([
         addDoc(logsCollectionRef, logEntry),
-        addDoc(remindersCollectionRef, reminderEntry)
+        addDoc(remindersCollectionRef, reminderEntry) // This might be removed if backend handles reminders
       ]);
       toast.info("Medication Taken", { description: `${med.name} logged.` });
-    }
-    catch (error) {
+    } catch (error) {
       console.error("Error logging med and scheduling reminder:", error);
       toast.error("Failed to log med", { description: error.message });
     }
-  }, [user]);
+  }, [user, db]); // db is now an explicit dependency if used directly
 
-  // Handle saving (add/edit) a medication (MODIFIED to log data)
   const handleSaveMedication = useCallback(async (medData, isEditing) => {
-    console.log(`App: handleSaveMedication triggered (${isEditing ? 'Edit' : 'Add'}) for`, medData?.name); // Existing log
-    if (!user) { console.log("SaveMed: No user, aborting."); toast.error("Please sign in."); return; }
+    if (!user) { toast.error("Please sign in."); return; }
 
-    const medDocRef = doc(db, 'users', user.uid, 'medications', medData.id);
+    // medData.id should be present for editing, and generated/present for adding
+    // If adding a new medication, medData.id might need to be generated here or in the dialog
+    // Assuming medData.id is correctly handled by AddEditMedicationDialog (e.g., using doc(collectionRef).id for new)
+    const medDocRef = medData.id ?
+      doc(db, 'users', user.uid, 'medications', medData.id) :
+      doc(collection(db, 'users', user.uid, 'medications')); // Auto-generate ID for new medication
 
-    // Prepare data object
     const dataToSave = {
       name: medData.name,
-      interval: medData.interval,
-      dosageAmount: medData.dosageAmount, // Should be number or null
-      dosageUnit: medData.dosageUnit,     // Should be string or null
+      dosageIntervalHours: parseFloat(medData.dosageIntervalHours) || null, // Ensure it's a number
+      dosageAmount: medData.dosageAmount || null,
+      dosageUnit: medData.dosageUnit || null,
+      // 'interval' field was used before, standardizing to 'dosageIntervalHours' from useFirestoreData
     };
-
-    // --- ADD DEBUG LOG HERE ---
-    console.log("Attempting to save medication data:", JSON.stringify(dataToSave, null, 2));
-    // --- END DEBUG LOG ---
-
     try {
-      // Attempt the Firestore write operation
-      await setDoc(medDocRef, dataToSave);
-      // Toast is handled within the Dialog component upon successful save trigger
-      // (Though it won't be called if setDoc fails)
+      await setDoc(medDocRef, dataToSave, { merge: true }); // Use merge if creating new or partially updating
+      toast.success(`Medication ${isEditing ? 'updated' : 'added'} successfully!`);
+      setIsDialogOpen(false); // Close dialog on success
     } catch (error) {
-      // Log the specific permission error
-      console.error("Error saving med:", error); // This is where your current error appears
-      toast.error(`Failed to ${isEditing ? 'update' : 'add'} medication`, { description: `Permission denied or other error: ${error.message}` });
+      console.error("Error saving med:", error);
+      toast.error(`Failed to ${isEditing ? 'update' : 'add'} medication`, { description: error.message });
     }
-  }, [user]); // Depends on user
+  }, [user, db]); // db is now an explicit dependency
 
   const handleDeleteMedication = useCallback(async (medIdToDelete) => {
-    console.log("App: handleDeleteMedication triggered for ID:", medIdToDelete); // Debug Log
-    if (!user) { console.log("DeleteMed: No user, aborting."); toast.error("Please sign in."); return; }
-    const medToDelete = medications.find(med => med.id === medIdToDelete); const medName = medToDelete ? medToDelete.name : 'Medication';
+    if (!user) { toast.error("Please sign in."); return; }
+    const medToDelete = medications.find(med => med.id === medIdToDelete);
+    const medName = medToDelete ? medToDelete.name : 'Medication';
     const medDocRef = doc(db, 'users', user.uid, 'medications', medIdToDelete);
-    try { await deleteDoc(medDocRef); toast.error("Medication Deleted", { description: `${medName} removed.` }); }
-    catch (error) { console.error("Error deleting med:", error); toast.error("Failed to delete med", { description: error.message }); }
-  }, [user, medications]);
+    try {
+      await deleteDoc(medDocRef);
+      toast.error("Medication Deleted", { description: `${medName} removed.` }); // Using error style for delete confirmation
+    } catch (error) {
+      console.error("Error deleting med:", error);
+      toast.error("Failed to delete med", { description: error.message });
+    }
+  }, [user, medications, db]); // db and medications are dependencies
 
   // --- UI Control Handlers (with Debugging Logs) ---
+  // These remain largely the same but rely on state managed by App.jsx
   const handleEditMedication = useCallback((med) => {
-    console.log("App: handleEditMedication triggered for", med?.name); // Debug Log
     setEditingMedication(med);
     setIsDialogOpen(true);
   }, []);
 
   const handleAddNewMedication = useCallback(() => {
-    console.log("App: handleAddNewMedication triggered"); // Debug Log
     setEditingMedication(null);
     setIsDialogOpen(true);
   }, []);
@@ -339,11 +200,7 @@ const App = () => {
   // --- Log Action Handlers (with Debugging Logs) ---
 
   const handleCopyLog = useCallback(() => {
-    console.log("handleCopyLog triggered."); // Log: Start
-    console.log("Current medLogs:", medLogs); // Log: Data Input
-
     if (!medLogs || medLogs.length === 0) {
-      console.log("CopyLog: Log is empty or invalid.");
       toast.warning("Log is empty", { description: "There are no medication logs to copy." });
       return;
     }
@@ -363,9 +220,6 @@ const App = () => {
         })
         .join('\n'); // Newline separated
 
-      console.log("CopyLog: Formatted log string length:", formattedLog.length); // Log: Formatted data
-      // console.log("CopyLog: Formatted log content:\n", formattedLog); // Log: Uncomment to see full content
-
       if (!formattedLog) {
         console.error("CopyLog: Formatted log string is empty!");
         toast.error("Copy failed", { description: "Could not format log data." });
@@ -375,7 +229,6 @@ const App = () => {
       // Use Clipboard API
       navigator.clipboard.writeText(formattedLog)
         .then(() => {
-          console.log("CopyLog: writeText successful."); // Log: Success
           toast.success("Log copied to clipboard!");
         })
         .catch(err => {
@@ -391,11 +244,7 @@ const App = () => {
   }, [medLogs]); // Depends on medLogs
 
   const handleExportCSV = useCallback(() => {
-    console.log("handleExportCSV triggered."); // Log: Start
-    console.log("Current medLogs:", medLogs); // Log: Data Input
-
     if (!medLogs || medLogs.length === 0) {
-      console.log("ExportCSV: Log is empty or invalid.");
       toast.warning("Log is empty", { description: "There are no medication logs to export." });
       return;
     }
@@ -417,8 +266,6 @@ const App = () => {
 
       // Combine header and rows
       const csvContent = [header.join(','), ...rows.map(row => row.join(','))].join('\n');
-      console.log("ExportCSV: Generated CSV content length:", csvContent.length); // Log: Generated CSV
-      // console.log("ExportCSV: CSV content:\n", csvContent); // Log: Uncomment to see full content
 
       if (!csvContent) {
         console.error("ExportCSV: Generated CSV content is empty!");
@@ -437,9 +284,7 @@ const App = () => {
         link.setAttribute("download", `medication_log_${new Date().toISOString().split('T')[0]}.csv`);
         link.style.visibility = 'hidden';
         document.body.appendChild(link);
-        console.log("ExportCSV: Triggering download link click..."); // Log: Before click
         link.click();
-        console.log("ExportCSV: Download link clicked."); // Log: After click
         // Cleanup
         document.body.removeChild(link);
         URL.revokeObjectURL(url); // Release object URL memory
@@ -476,52 +321,13 @@ const App = () => {
     <>
       <SonnerToaster position="top-center" richColors />
       <div className="max-w-4xl mx-auto p-4 md:p-6 lg:p-8 bg-background min-h-screen font-sans">
-        {/* Header */}
-        <header className="mb-6 pb-4 border-b flex flex-col md:flex-row justify-between items-center gap-4">
-          <div className="flex-1 flex justify-start order-2 md:order-1">
-            {notificationButton}
-          </div>
-          <div className="text-center order-1 md:order-2">
-            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground mb-2 flex items-center justify-center gap-2">
-              <Pill className="text-primary" /> MedTracker
-            </h1>
-            <p className="text-muted-foreground text-sm">
-              {user ? `Tracking for ${user.displayName || 'User'}` : 'Your personal medication schedule'}
-            </p>
-          </div>
-          <div className="flex-1 flex justify-end order-3">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon">
-                  {/* Show Sun or Moon based on the currently RESOLVED theme */}
-                  {resolvedTheme === 'dark' ? (
-                    <Moon className="h-[1.2rem] w-[1.2rem] transition-all" />
-                  ) : (
-                    <Sun className="h-[1.2rem] w-[1.2rem] transition-all" />
-                  )}
-                  <span className="sr-only">Toggle theme</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {/* Call setTheme with the user's PREFERENCE */}
-                <DropdownMenuItem onClick={() => setTheme('light')}>
-                  Light
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme('dark')}>
-                  Dark
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme('system')}>
-                  System
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {user && (
-              <Button variant="outline" size="sm" onClick={handleSignOut}>
-                Sign Out
-              </Button>
-            )}
-          </div>
-        </header>
+        <AppHeader
+          user={user}
+          resolvedTheme={resolvedTheme}
+          setTheme={setTheme}
+          handleSignOut={handleSignOut}
+          notificationButton={notificationButton}
+        />
 
         {/* Conditional Content: Sign-In or Main App */}
         {!user ? (
@@ -537,45 +343,24 @@ const App = () => {
               <TabsTrigger value="dashboard"><LayoutGrid className="mr-2 h-4 w-4" /> Dashboard</TabsTrigger>
               <TabsTrigger value="calendar"><CalendarDays className="mr-2 h-4 w-4" /> Calendar View</TabsTrigger>
             </TabsList>
-            {/* Dashboard Content */}
             <TabsContent value="dashboard">
-              <section className="mb-8">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-semibold text-foreground">Your Medications</h2>
-                  <div className="flex gap-2">
-                    {/* Manage Button */}
-                    <Button variant={isManageMode ? "default" : "outline"} onClick={() => { console.log("Toggle Manage Mode clicked"); setIsManageMode(!isManageMode); }}>
-                      {isManageMode ? <Check size={16} className="mr-2" /> : <Edit size={16} className="mr-2" />}
-                      {isManageMode ? 'Done Managing' : 'Manage'}
-                    </Button>
-                    {/* Add New Button (in header) */}
-                    {isManageMode && (<Button variant="outline" onClick={() => { console.log("Header Add New button clicked"); handleAddNewMedication(); }}> <PlusCircle size={16} className="mr-2" /> Add New </Button>)}
-                  </div>
-                </div>
-                <MedicationGrid
-                  medications={medications} nextDueTimes={nextDueTimes} currentTime={currentTime}
-                  handleTakeMedication={handleTakeMedication} handleEditMedication={handleEditMedication}
-                  isManageMode={isManageMode} handleDeleteMedication={handleDeleteMedication}
-                  handleAddNewMedication={handleAddNewMedication}
-                />
-              </section>
-              <section>
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-semibold text-foreground">Medication History</h2>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={medLogs.length === 0}><MoreHorizontal className="h-4 w-4 mr-2" /> Actions</Button></DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Log Actions</DropdownMenuLabel><DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={handleCopyLog}><ClipboardCopy className="mr-2 h-4 w-4" /><span>Copy Full Log</span></DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleExportCSV}><Download className="mr-2 h-4 w-4" /><span>Export as CSV</span></DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-                <LogList
-                  medLogs={medLogs} visibleLogCount={visibleLogCount}
-                  handleLoadMoreLogs={handleLoadMoreLogs} logsPerPage={LOGS_PER_PAGE}
-                />
-              </section>
+              <DashboardTab
+                medications={medications}
+                nextDueTimes={nextDueTimes}
+                currentTime={currentTime}
+                handleTakeMedication={handleTakeMedication}
+                handleEditMedication={handleEditMedication}
+                isManageMode={isManageMode}
+                setIsManageMode={setIsManageMode}
+                handleDeleteMedication={handleDeleteMedication}
+                handleAddNewMedication={handleAddNewMedication}
+                medLogs={medLogs}
+                visibleLogCount={visibleLogCount}
+                handleLoadMoreLogs={handleLoadMoreLogs}
+                logsPerPage={LOGS_PER_PAGE}
+                handleCopyLog={handleCopyLog}
+                handleExportCSV={handleExportCSV}
+              />
             </TabsContent>
             {/* Calendar Content */}
             <TabsContent value="calendar"> <MedicationCalendarView medLogs={medLogs} /> </TabsContent>

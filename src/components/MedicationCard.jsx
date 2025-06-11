@@ -26,9 +26,6 @@ const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onE
   const progressColorClass = getProgressColorClass();
   const circumference = 2 * Math.PI * 45;
 
-  // --- Debugging Log ---
-  // console.log(`Rendering MedicationCard for: ${med.name}, Manage Mode: ${isManageMode}, onTake prop exists: ${!!onTake}`);
-
   return (
     <Card className="relative overflow-hidden transition-all hover:shadow-md flex flex-col h-full">
       {/* SVG Progress */}
@@ -46,16 +43,14 @@ const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onE
               {/* Edit Button */}
               <TooltipProvider delayDuration={200}><Tooltip><TooltipTrigger asChild>
                     <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary"
-                      // --- Debugging Log ---
-                      onClick={() => { console.log(`Edit button clicked for ${med.name}`); onEdit(med); }}
+                      onClick={() => { onEdit(med); }}
                       aria-label={`Edit ${med.name}`}><Edit size={16} />
                     </Button>
               </TooltipTrigger><TooltipContent><p>Edit {med.name}</p></TooltipContent></Tooltip></TooltipProvider>
               {/* Delete Button */}
               <TooltipProvider delayDuration={200}><Tooltip><TooltipTrigger asChild>
                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                       // --- Debugging Log ---
-                       onClick={() => { console.log(`Delete button clicked for ${med.name}`); onDelete(med.id); }}
+                       onClick={() => { onDelete(med.id); }}
                        aria-label={`Delete ${med.name}`}><Trash2 size={16} />
                      </Button>
               </TooltipTrigger><TooltipContent><p>Delete {med.name}</p></TooltipContent></Tooltip></TooltipProvider>
@@ -76,8 +71,7 @@ const MedicationCard = React.memo(({ med, nextDueTimes, currentTime, onTake, onE
       <CardFooter className="relative z-10 pt-0 justify-center">
         <TooltipProvider delayDuration={200}><Tooltip><TooltipTrigger asChild>
               <Button
-                // --- Debugging Log ---
-                onClick={() => { console.log(`Take button clicked for ${med.name}`); onTake(med); }}
+                onClick={() => { onTake(med); }}
                 variant={timeInfo.isOverdue ? "destructive" : "default"}
                 disabled={isManageMode}
                 size="lg"
