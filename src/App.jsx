@@ -6,11 +6,8 @@ import {
 import { toast } from "sonner";
 
 // Import Firebase Auth, Firestore, & Messaging functions and instances
-import { auth, db } from './firebaseConfig'; // Assuming you created this file in Step 2
-import { onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider } from "firebase/auth";
-import {
-  collection, doc, onSnapshot, addDoc, setDoc, deleteDoc, query, orderBy, Timestamp
-} from "firebase/firestore";
+import { db } from './firebaseConfig'; // db is still needed for FCM token storage
+import { doc, setDoc, Timestamp } from "firebase/firestore"; // Kept for FCM token storage
 import { getMessaging, getToken, isSupported } from "firebase/messaging"; // Messaging imports
 
 // Import UI Components
@@ -26,7 +23,8 @@ import LogList from './components/LogList';
 import AddEditMedicationDialog from './components/AddEditMedicationDialog';
 import MedicationCalendarView from './components/MedicationCalendarView';
 import { ThemeProvider, useTheme } from './components/ThemeProvider'; // Import useTheme hook
-
+import useAuth from './hooks/useAuth'; // Import the useAuth hook
+import useMedicationData from './hooks/useMedicationData'; // Import the useMedicationData hook
 
 
 // Import Helpers
@@ -41,13 +39,21 @@ const LOGS_PER_PAGE = 25;
  * Manages state via Firestore, Auth, and renders child components.
  */
 const App = () => {
-  // --- State ---
-  const [user, setUser] = useState(null);
-  const [loadingAuth, setLoadingAuth] = useState(true);
-  const [medications, setMedications] = useState([]);
-  const [medLogs, setMedLogs] = useState([]);
-  const [loadingData, setLoadingData] = useState(true);
-  const [nextDueTimes, setNextDueTimes] = useState({});
+  // --- Auth State (from hook) ---
+  const { user, loadingAuth, handleSignIn, handleSignOut } = useAuth();
+
+  // --- Medication Data State (from hook) ---
+  const {
+    medications,
+    medLogs,
+    loadingData,
+    nextDueTimes,
+    addMedicationLog,
+    saveMedication,
+    deleteMedicationFromDb
+  } = useMedicationData(user);
+
+  // --- UI State ---
   const [isManageMode, setIsManageMode] = useState(false);
   const [editingMedication, setEditingMedication] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -78,117 +84,20 @@ const App = () => {
     });
   }, []);
 
-  // Auth listener
-  useEffect(() => {
-    setLoadingAuth(true);
-    console.log("Setting up Auth listener...");
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      console.log("Auth state changed:", currentUser ? currentUser.uid : "null");
-      setUser(currentUser);
-      setLoadingAuth(false);
-      if (!currentUser) {
-        setMedications([]); setMedLogs([]); setNextDueTimes({}); setLoadingData(true);
-        setIsManageMode(false); setVisibleLogCount(LOGS_PER_PAGE);
-      } else {
-        if (isFcmSupported) { setNotificationPermission(Notification.permission); }
-      }
-    });
-    return () => { console.log("Cleaning up Auth listener."); unsubscribeAuth(); };
-  }, [isFcmSupported]);
-
-  // Listener for Firestore Data Changes (MODIFIED with more logging)
-
+  // Effect to reset UI state when user logs out (data state is handled in useMedicationData)
   useEffect(() => {
     if (!user) {
-      setLoadingData(false);
-      // Clear state if necessary (already handled in auth listener)
-      // if (medications.length > 0) setMedications([]);
-      // if (medLogs.length > 0) setMedLogs([]);
-      // if (Object.keys(nextDueTimes).length > 0) setNextDueTimes({});
-      return;
+      // medications, medLogs, nextDueTimes, loadingData are reset by useMedicationData or its deps
+      setIsManageMode(false);
+      setVisibleLogCount(LOGS_PER_PAGE);
+      // Notification permission is user-dependent but not strictly "app data" cleared on logout
+    } else {
+      // Ensure notification permission is checked/updated when user logs IN
+      if (isFcmSupported) {
+        setNotificationPermission(Notification.permission);
+      }
     }
-
-    console.log(`Setting up Firestore listeners for user: ${user.uid}`);
-    setLoadingData(true);
-    let unsubMeds = () => { };
-    let unsubLogs = () => { };
-
-    try {
-      // Meds listener (Assume correct from previous steps)
-      const medsCollectionRef = collection(db, 'users', user.uid, 'medications');
-      unsubMeds = onSnapshot(medsCollectionRef, (querySnapshot) => {
-        const userMedications = querySnapshot.docs.map(doc => ({
-          id: doc.id, ...doc.data(),
-          dosageAmount: doc.data().dosageAmount || null,
-          dosageUnit: doc.data().dosageUnit || null,
-        }));
-        setMedications(userMedications);
-        // Only set loading false here if logs also finished or handle separately
-        console.log("Firestore: Medications updated.");
-      }, (error) => {
-        console.error("Error fetching medications:", error);
-        toast.error("Failed to load medications", { description: error.message });
-        setLoadingData(false); // Stop loading on error
-      });
-
-      // Logs listener (ADDED DETAILED LOGGING)
-      const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
-      const logsQuery = query(logsCollectionRef, orderBy("takenAt", "desc"));
-      unsubLogs = onSnapshot(logsQuery, (querySnapshot) => {
-        // --- Debug Log: Raw Snapshot ---
-        console.log(`Logs Snapshot received. Size: ${querySnapshot.size}, Empty: ${querySnapshot.empty}`);
-
-        const userLogs = [];
-        querySnapshot.forEach((doc) => {
-          const data = doc.data();
-          // --- Debug Log: Individual Doc Data ---
-          // console.log(`Processing log doc ${doc.id}:`, data);
-          // Check if timestamps exist before converting
-          const takenAtISO = data.takenAt?.toDate ? data.takenAt.toDate().toISOString() : null;
-          const nextDueAtISO = data.nextDueAt?.toDate ? data.nextDueAt.toDate().toISOString() : null;
-          if (!takenAtISO || !nextDueAtISO) {
-            console.warn(`Log doc ${doc.id} missing or has invalid timestamp fields:`, { takenAt: data.takenAt, nextDueAt: data.nextDueAt });
-          }
-          userLogs.push({
-            id: doc.id,
-            ...data,
-            takenAt: takenAtISO, // Store ISO string or null
-            nextDueAt: nextDueAtISO // Store ISO string or null
-          });
-        });
-
-        // --- Debug Log: Processed Array ---
-        console.log("Processed userLogs array:", userLogs);
-
-        setMedLogs(userLogs); // Update state with logs from Firestore
-        setLoadingData(false); // Set loading false after both listeners potentially ran
-        console.log("Logs loaded/updated from Firestore state set.");
-      }, (error) => {
-        console.error("Error fetching logs:", error);
-        toast.error("Failed to load medication history", { description: error.message });
-        setLoadingData(false); // Stop loading on error
-      });
-
-    } catch (error) {
-      console.error("Error setting up Firestore listeners:", error);
-      setLoadingData(false);
-      toast.error("Error connecting to database.");
-    }
-
-    // Cleanup listeners
-    return () => {
-      console.log(`Cleaning up Firestore listeners for user: ${user.uid}`);
-      unsubMeds();
-      unsubLogs();
-    };
-  }, [user]); // Re-run when user changes
-
-  // Derive nextDueTimes
-  useEffect(() => {
-    if (medLogs.length === 0) { setNextDueTimes({}); return; }
-    const latest = {}; medLogs.forEach(log => { if (!latest[log.medicationId] && log.nextDueAt) latest[log.medicationId] = log.nextDueAt; });
-    setNextDueTimes(latest);
-  }, [medLogs]);
+  }, [user, isFcmSupported]);
 
   // Update current time
   useEffect(() => { const timer = setInterval(() => setCurrentTime(new Date()), 10000); return () => clearInterval(timer); }, []);
@@ -227,100 +136,65 @@ const App = () => {
   }, [user, isFcmSupported]);
   // --- End Notification Handler ---
 
-
-  // --- Auth Handlers ---
-  const handleSignIn = useCallback(async () => {
-    console.log("Sign-in button clicked!"); // Debug Log
-    const provider = new GoogleAuthProvider();
-    try {
-      setLoadingAuth(true);
-      console.log("Attempting signInWithPopup..."); // Debug Log
-      await signInWithPopup(auth, provider);
-      console.log("signInWithPopup successful (or popup closed)"); // Debug Log
-      toast.success("Signed in successfully!");
-    } catch (error) {
-      console.error("Sign-in error:", error); // Keep detailed error log
-      if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') { toast.info("Sign-in cancelled."); }
-      else { toast.error("Sign-in failed", { description: error.message }); }
-      setLoadingAuth(false);
-    }
-  }, [setLoadingAuth]); // Dependency added
-
-  const handleSignOut = useCallback(async () => {
-    console.log("App: handleSignOut triggered"); // Debug Log
-    try { await signOut(auth); toast.info("Signed out."); }
-    catch (error) { console.error("Sign-out error:", error); toast.error("Sign-out failed"); }
-  }, []);
-  // --- End Auth Handlers ---
-
-  // --- Core Logic Handlers (with Debugging Logs) ---
+  // Core Logic Handlers now use functions from useMedicationData and useAuth hooks
   const handleTakeMedication = useCallback(async (med) => {
-    console.log("App: handleTakeMedication triggered for", med?.name); // Debug Log
-    if (!user) { console.log("TakeMed: No user, aborting."); toast.error("Please sign in."); return; }
-    const now = new Date(); const nextDue = new Date(now.getTime() + med.interval * 60 * 60 * 1000);
-    const logEntry = { medicationId: med.id, medicationName: med.name, takenAt: Timestamp.fromDate(now), nextDueAt: Timestamp.fromDate(nextDue) };
-    const reminderEntry = {
-      userId: user.uid, // Associate with the current user
-      medicationName: med.name,
-      dueAt: Timestamp.fromDate(nextDue), // When the reminder should be sent
-    };
-    try {
-      const logsCollectionRef = collection(db, 'users', user.uid, 'medLogs');
-      const remindersCollectionRef = collection(db, "scheduledReminders");
-
-      await Promise.all([
-        addDoc(logsCollectionRef, logEntry),
-        addDoc(remindersCollectionRef, reminderEntry)
-      ]);
-      toast.info("Medication Taken", { description: `${med.name} logged.` });
+    console.log("App: handleTakeMedication triggered for", med?.name);
+    if (!user) {
+      toast.error("Please sign in.");
+      return;
     }
-    catch (error) {
-      console.error("Error logging med and scheduling reminder:", error);
+    try {
+      await addMedicationLog(med); // Call hook function
+      toast.info("Medication Taken", { description: `${med.name} logged.` });
+    } catch (error) {
+      console.error("App: Error logging med and scheduling reminder:", error);
       toast.error("Failed to log med", { description: error.message });
     }
-  }, [user]);
+  }, [user, addMedicationLog]); // addMedicationLog is from hook
 
-  // Handle saving (add/edit) a medication (MODIFIED to log data)
   const handleSaveMedication = useCallback(async (medData, isEditing) => {
-    console.log(`App: handleSaveMedication triggered (${isEditing ? 'Edit' : 'Add'}) for`, medData?.name); // Existing log
-    if (!user) { console.log("SaveMed: No user, aborting."); toast.error("Please sign in."); return; }
-
-    const medDocRef = doc(db, 'users', user.uid, 'medications', medData.id);
-
-    // Prepare data object
-    const dataToSave = {
-      name: medData.name,
-      interval: medData.interval,
-      dosageAmount: medData.dosageAmount, // Should be number or null
-      dosageUnit: medData.dosageUnit,     // Should be string or null
-    };
-
-    // --- ADD DEBUG LOG HERE ---
-    console.log("Attempting to save medication data:", JSON.stringify(dataToSave, null, 2));
-    // --- END DEBUG LOG ---
-
-    try {
-      // Attempt the Firestore write operation
-      await setDoc(medDocRef, dataToSave);
-      // Toast is handled within the Dialog component upon successful save trigger
-      // (Though it won't be called if setDoc fails)
-    } catch (error) {
-      // Log the specific permission error
-      console.error("Error saving med:", error); // This is where your current error appears
-      toast.error(`Failed to ${isEditing ? 'update' : 'add'} medication`, { description: `Permission denied or other error: ${error.message}` });
+    console.log(`App: handleSaveMedication triggered (${isEditing ? 'Edit' : 'Add'}) for`, medData?.name);
+    if (!user) {
+      toast.error("Please sign in.");
+      return;
     }
-  }, [user]); // Depends on user
+    // The Dialog component will generate an ID for new medications before calling this.
+    // So, medData.id should always be present.
+    if (!medData.id) {
+        console.error("App: medData.id is missing in handleSaveMedication.");
+        toast.error(`Failed to ${isEditing ? 'update' : 'add'} medication`, { description: "Medication ID was missing." });
+        return;
+    }
+    try {
+      await saveMedication(medData); // Call hook function
+      // Success toast is usually handled by the dialog calling this, if applicable
+      // For example, AddEditMedicationDialog might call toast.success after onSave completes.
+      // If not, add success toast here:
+      // toast.success(`Medication ${isEditing ? 'updated' : 'added'} successfully!`);
+    } catch (error) {
+      console.error("App: Error saving med:", error);
+      toast.error(`Failed to ${isEditing ? 'update' : 'add'} medication`, { description: error.message });
+    }
+  }, [user, saveMedication]); // saveMedication is from hook
 
   const handleDeleteMedication = useCallback(async (medIdToDelete) => {
-    console.log("App: handleDeleteMedication triggered for ID:", medIdToDelete); // Debug Log
-    if (!user) { console.log("DeleteMed: No user, aborting."); toast.error("Please sign in."); return; }
-    const medToDelete = medications.find(med => med.id === medIdToDelete); const medName = medToDelete ? medToDelete.name : 'Medication';
-    const medDocRef = doc(db, 'users', user.uid, 'medications', medIdToDelete);
-    try { await deleteDoc(medDocRef); toast.error("Medication Deleted", { description: `${medName} removed.` }); }
-    catch (error) { console.error("Error deleting med:", error); toast.error("Failed to delete med", { description: error.message }); }
-  }, [user, medications]);
+    console.log("App: handleDeleteMedication triggered for ID:", medIdToDelete);
+    if (!user) {
+      toast.error("Please sign in.");
+      return;
+    }
+    const medToDelete = medications.find(med => med.id === medIdToDelete);
+    const medName = medToDelete ? medToDelete.name : 'Medication';
+    try {
+      await deleteMedicationFromDb(medIdToDelete); // Call hook function
+      toast.error("Medication Deleted", { description: `${medName} removed.` }); // Using toast.error for "deleted" type notifications as per original
+    } catch (error) {
+      console.error("App: Error deleting med:", error);
+      toast.error("Failed to delete med", { description: error.message });
+    }
+  }, [user, medications, deleteMedicationFromDb]); // deleteMedicationFromDb is from hook, medications for medName
 
-  // --- UI Control Handlers (with Debugging Logs) ---
+  // --- UI Control Handlers ---
   const handleEditMedication = useCallback((med) => {
     console.log("App: handleEditMedication triggered for", med?.name); // Debug Log
     setEditingMedication(med);
@@ -335,124 +209,80 @@ const App = () => {
 
   const handleDialogChange = useCallback((open) => { setIsDialogOpen(open); if (!open) { setEditingMedication(null); } }, []);
   const handleLoadMoreLogs = useCallback(() => { setVisibleLogCount(prevCount => prevCount + LOGS_PER_PAGE); }, []);
-  // --- Log Action Handlers ---
-  // --- Log Action Handlers (with Debugging Logs) ---
+  // --- Log Action Handlers (medLogs is now from useMedicationData) ---
 
   const handleCopyLog = useCallback(() => {
-    console.log("handleCopyLog triggered."); // Log: Start
-    console.log("Current medLogs:", medLogs); // Log: Data Input
-
+    // ... (implementation remains the same, medLogs is from the hook)
+    console.log("handleCopyLog triggered.");
     if (!medLogs || medLogs.length === 0) {
-      console.log("CopyLog: Log is empty or invalid.");
       toast.warning("Log is empty", { description: "There are no medication logs to copy." });
       return;
     }
-
     try {
-      // Format log data for clipboard (more readable with date)
       const formattedLog = medLogs
-        .map((log, index) => {
-          // Log individual log item data being processed
-          // console.log(`CopyLog Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
-          // Ensure dates are valid before formatting
+        .map(log => {
           const takenTime = log.takenAt ? formatTime(log.takenAt, true) : 'N/A';
           const dueTime = log.nextDueAt ? formatTime(log.nextDueAt, true) : 'N/A';
-          // Ensure medicationName exists
           const medName = log.medicationName || 'Unknown Medication';
           return `${medName} - Taken: ${takenTime} - Next Due: ${dueTime}`;
         })
-        .join('\n'); // Newline separated
-
-      console.log("CopyLog: Formatted log string length:", formattedLog.length); // Log: Formatted data
-      // console.log("CopyLog: Formatted log content:\n", formattedLog); // Log: Uncomment to see full content
-
+        .join('\n');
       if (!formattedLog) {
-        console.error("CopyLog: Formatted log string is empty!");
         toast.error("Copy failed", { description: "Could not format log data." });
         return;
       }
-
-      // Use Clipboard API
       navigator.clipboard.writeText(formattedLog)
-        .then(() => {
-          console.log("CopyLog: writeText successful."); // Log: Success
-          toast.success("Log copied to clipboard!");
-        })
+        .then(() => toast.success("Log copied to clipboard!"))
         .catch(err => {
-          console.error('CopyLog: writeText failed: ', err); // Log: Error
-          toast.error("Copy failed", { description: "Could not access clipboard. Check browser permissions." });
+          console.error('CopyLog: writeText failed: ', err);
+          toast.error("Copy failed", { description: "Could not access clipboard." });
         });
-
     } catch (error) {
       console.error("CopyLog: Error during formatting or copy:", error);
       toast.error("Copy failed", { description: "An unexpected error occurred." });
     }
-
-  }, [medLogs]); // Depends on medLogs
+  }, [medLogs]);
 
   const handleExportCSV = useCallback(() => {
-    console.log("handleExportCSV triggered."); // Log: Start
-    console.log("Current medLogs:", medLogs); // Log: Data Input
-
+    // ... (implementation remains the same, medLogs is from the hook)
+    console.log("handleExportCSV triggered.");
     if (!medLogs || medLogs.length === 0) {
-      console.log("ExportCSV: Log is empty or invalid.");
       toast.warning("Log is empty", { description: "There are no medication logs to export." });
       return;
     }
-
     try {
-      // CSV Header
       const header = ['Medication Name', 'Taken At (ISO)', 'Next Due At (ISO)'];
-      // CSV Rows
-      const rows = medLogs.map((log, index) => {
-        // Log individual log item data being processed
-        // console.log(`ExportCSV Item ${index}:`, { name: log.medicationName, taken: log.takenAt, due: log.nextDueAt });
-        // Ensure values exist, default to empty string if not
+      const rows = medLogs.map(log => {
         const name = log.medicationName || '';
-        const takenAt = log.takenAt || ''; // These should be ISO strings from Firestore listener
-        const nextDueAt = log.nextDueAt || ''; // These should be ISO strings
-        // Quote name and escape quotes within name
+        const takenAt = log.takenAt || '';
+        const nextDueAt = log.nextDueAt || '';
         return [`"${name.replace(/"/g, '""')}"`, takenAt, nextDueAt];
       });
-
-      // Combine header and rows
       const csvContent = [header.join(','), ...rows.map(row => row.join(','))].join('\n');
-      console.log("ExportCSV: Generated CSV content length:", csvContent.length); // Log: Generated CSV
-      // console.log("ExportCSV: CSV content:\n", csvContent); // Log: Uncomment to see full content
-
       if (!csvContent) {
-        console.error("ExportCSV: Generated CSV content is empty!");
         toast.error("Export failed", { description: "Could not generate CSV data." });
         return;
       }
-
-      // Create Blob and Download Link
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement("a");
-
-      // Check for download attribute support
       if (link.download !== undefined) {
         const url = URL.createObjectURL(blob);
         link.setAttribute("href", url);
         link.setAttribute("download", `medication_log_${new Date().toISOString().split('T')[0]}.csv`);
         link.style.visibility = 'hidden';
         document.body.appendChild(link);
-        console.log("ExportCSV: Triggering download link click..."); // Log: Before click
         link.click();
-        console.log("ExportCSV: Download link clicked."); // Log: After click
-        // Cleanup
         document.body.removeChild(link);
-        URL.revokeObjectURL(url); // Release object URL memory
+        URL.revokeObjectURL(url);
         toast.success("Log exported as CSV!");
       } else {
-        console.error("ExportCSV: link.download attribute not supported.");
-        toast.error("Export failed", { description: "CSV export is not supported in this browser." });
+        toast.error("Export failed", { description: "CSV export is not supported by browser." });
       }
     } catch (error) {
       console.error("ExportCSV: Error during CSV generation or download:", error);
       toast.error("Export failed", { description: "An unexpected error occurred." });
     }
-  }, [medLogs]); // Depends on medLogs
+  }, [medLogs]);
 
   // --- End Log Action Handlers ---
 
